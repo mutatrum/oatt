@@ -320,7 +320,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,
-                error: isImplicated ? parsed.details : 'Batch cancelled due to node being offline or other failure',
+                error: isImplicated ? parsed.details : 'Batch cancelled due to failure in other node',
                 rejectionReason: isImplicated ? parsed.reason : 'batch_failed',
                 detectedMinimum: isImplicated ? parsed.minSize : undefined,
             });

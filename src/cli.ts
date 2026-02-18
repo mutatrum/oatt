@@ -367,6 +367,14 @@ program
         const maxSize = parseInt(options.maxSize);
 
         let plan = createPlan({ budget, defaultSize, maxSize });
+        const { formatSats } = await import('./planner.js');
+
+        // Log adjustments
+        plan.channels.forEach(ch => {
+            if (ch.isMinimumEnforced) {
+                console.log(chalk.blue(`ℹ Bumped ${ch.alias} to ${formatSats(ch.amount)} due to learned minimum size.`));
+            }
+        });
 
         console.log(chalk.bold('\nBatch Channel Open Plan'));
         console.log(formatPlan(plan));
