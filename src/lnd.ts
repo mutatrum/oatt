@@ -53,7 +53,11 @@ export async function getNodeInfo(pubkey: string): Promise<NodeInfo | null> {
             features: info.features?.map((f: { type: string }) => f.type) ?? [],
         };
     } catch (error) {
-        console.error(`Error getting node info for ${pubkey}:`, error);
+        // Suppress loud error for nodes not in the graph
+        const isUnknown = Array.isArray(error) && error[0] === 404 && error[1] === 'NodeIsUnknown';
+        if (!isUnknown) {
+            console.error(`Error getting node info for ${pubkey}:`, error);
+        }
         return null;
     }
 }

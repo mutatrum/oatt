@@ -157,11 +157,13 @@ export async function collectForceClosedCandidates(): Promise<ChannelCandidate[]
  * Run force-closed collection and save results
  */
 export async function runForceClosedCollection(): Promise<number> {
-    console.log('Collecting force-closed channel candidates...');
-
     const candidates = await collectForceClosedCandidates();
 
     console.log(`Found ${candidates.length} candidates from force-closed channels`);
+
+    // Clear old force-closed candidates
+    const { removeCandidatesBySource } = await import('../storage.js');
+    removeCandidatesBySource('force_closed');
 
     // Save each candidate
     for (const candidate of candidates) {
