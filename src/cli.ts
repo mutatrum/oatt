@@ -153,7 +153,7 @@ program
 
 function formatCandidateHeader(): string {
     return chalk.gray(
-        'Pubkey          Channels  Capacity  Distance  Min Size  Source        Alias'
+        'Pubkey          Channels  Capacity  Distance  Min Size  Source        Status         Alias'
     );
 }
 
@@ -164,23 +164,45 @@ function formatCandidate(c: ChannelCandidate, showDetails: boolean): string {
     const distance = (c.distance?.toString() ?? '-').padStart(8);
     const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(10) : '         -';
     const source = c.source.padEnd(12);
-    const alias = c.alias.slice(0, 30);
+    const alias = c.alias.slice(0, 25);
 
-    let line = `${pubkey}  ${channels}  ${capacity}  ${distance}  ${minSize}  ${source}  ${alias}`;
+    // Determine status
+    let status = 'Eligible';
+    let statusColor = chalk.green;
 
-    // Color based on rejection status
     if (c.rejections.length > 0) {
-        const hasBlockingRejection = c.rejections.some(r => !REJECTION_CONFIG[r.reason].retryable);
-        if (hasBlockingRejection) {
-            line = chalk.red(line);
+        const blocking = c.rejections.find(r => !REJECTION_CONFIG[r.reason].retryable);
+        if (blocking) {
+            status = 'Blocked';
+            statusColor = chalk.red;
         } else {
-            line = chalk.yellow(line);
+            // Check for most recent cooldown
+            let maxWaitDays = 0;
+            for (const r of c.rejections) {
+                const config = REJECTION_CONFIG[r.reason];
+                if (config.cooldownDays) {
+                    const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
+                    const elapsedMs = Date.now() - new Date(r.date).getTime();
+                    const remainingMs = cooldownMs - elapsedMs;
+                    if (remainingMs > 0) {
+                        const remainingDays = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
+                        maxWaitDays = Math.max(maxWaitDays, remainingDays);
+                    }
+                }
+            }
+            if (maxWaitDays > 0) {
+                status = `Wait ${maxWaitDays}d`;
+                statusColor = chalk.yellow;
+            }
         }
     }
 
+    const statusStr = statusColor(status.padEnd(13));
+    let line = `${pubkey}  ${channels}  ${capacity}  ${distance}  ${minSize}  ${source}  ${statusStr}  ${alias}`;
+
     if (showDetails && c.rejections.length > 0) {
         const rejectionDetails = c.rejections
-            .map(r => `    ${chalk.gray(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}`)
+            .map(r => `    ${chalk.gray(new Date(r.date).toLocaleDateString())} ${chalk.yellow(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}`)
             .join('\n');
         line += '\n' + rejectionDetails;
     }
