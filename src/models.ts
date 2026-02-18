@@ -12,6 +12,7 @@ export type RejectionReason =
     | 'rejected'
     | 'no_routing'
     | 'custom_requirements'
+    | 'coop_close'
     | 'internal_error';
 
 // Retry configuration for each rejection type
@@ -24,8 +25,12 @@ export const REJECTION_CONFIG: Record<RejectionReason, { retryable: boolean; coo
     rejected: { retryable: false },
     no_routing: { retryable: false },
     custom_requirements: { retryable: false },
+    coop_close: { retryable: false },
     internal_error: { retryable: true, cooldownDays: 0 },
 };
+
+// Reserve required by LND per channel (e.g. for anchors)
+export const ANCHOR_RESERVE = 2500;
 
 // Channel close types
 export type CloseType = 'local_force' | 'remote_force' | 'coop';

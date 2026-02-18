@@ -181,4 +181,18 @@ declare module 'ln-service' {
             is_inbound: boolean;
         }[];
     }>;
+
+    export function getChainBalance(args: {
+        lnd: unknown;
+    }): Promise<{
+        chain_confirmed_balance: number;
+        chain_unconfirmed_balance: number;
+    }>;
+
+    export function getWalletStatus(args: {
+        lnd: unknown;
+    }): Promise<{
+        is_active: boolean;
+        is_ready: boolean;
+    }>;
 }

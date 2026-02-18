@@ -299,14 +299,44 @@ program
 program
     .command('plan')
     .description('Create a batch channel open plan')
-    .requiredOption('-b, --budget <sats>', 'Total budget in sats')
+    .option('-b, --budget <sats>', 'Total budget in sats (defaults to available on-chain balance)')
     .option('-s, --default-size <sats>', 'Default channel size', '1000000')
     .option('-m, --max-size <sats>', 'Maximum channel size', '10000000')
     .action(async (options) => {
         const { createPlan, formatPlan, addToPlan, removeFromPlan, resizeInPlan } = await import('./planner.js');
         const inquirer = await import('inquirer');
+        const { getChainBalance, connectLnd } = await import('./lnd.js');
 
-        const budget = parseInt(options.budget);
+        let budget: number;
+        
+        try {
+            await connectLnd();
+            const balance = await getChainBalance();
+            const available = balance.confirmed;
+            
+            if (options.budget) {
+                budget = parseInt(options.budget);
+            } else {
+                console.log(chalk.gray(`\nAvailable on-chain balance: ${formatSats(available)}`));
+                // Suggest 95% of balance to leave some for fees/reserves
+                const suggested = Math.floor(available * 0.95);
+                const { budgetInput } = await inquirer.default.prompt([{
+                    type: 'number',
+                    name: 'budgetInput',
+                    message: 'Enter budget in sats:',
+                    default: suggested,
+                }]);
+                budget = budgetInput;
+            }
+        } catch (error) {
+            if (options.budget) {
+                budget = parseInt(options.budget);
+            } else {
+                console.error(chalk.red('Error fetching chain balance. Please specify --budget explicitly.'));
+                process.exit(1);
+            }
+        }
+
         const defaultSize = parseInt(options.defaultSize);
         const maxSize = parseInt(options.maxSize);
 
@@ -379,13 +409,31 @@ program
                         name: 'index',
                         message: 'Channel number to remove:',
                     }]);
-                    if (index !== undefined) {
-                        try {
-                            plan = removeFromPlan(plan, index - 1);  // Convert to 0-indexed
-                            console.log(formatPlan(plan));
-                        } catch (e) {
-                            console.log(chalk.red((e as Error).message));
+                    if (index !== undefined && index > 0 && index <= plan.channels.length) {
+                        const channel = plan.channels[index - 1];
+                        const { reason } = await inquirer.default.prompt([{
+                            type: 'list',
+                            name: 'reason',
+                            message: `Why remove ${channel.alias}?`,
+                            choices: Object.keys(REJECTION_CONFIG).map(r => ({ name: r, value: r })),
+                        }]);
+
+                        if (reason) {
+                            addRejection(channel.pubkey, {
+                                date: new Date(),
+                                reason: reason as RejectionReason,
+                                details: 'Removed from plan manually',
+                            });
+
+                            try {
+                                plan = removeFromPlan(plan, index - 1);  // Convert to 0-indexed
+                                console.log(formatPlan(plan));
+                            } catch (e) {
+                                console.log(chalk.red((e as Error).message));
+                            }
                         }
+                    } else {
+                        console.log(chalk.red('Invalid index'));
                     }
                     break;
                 }

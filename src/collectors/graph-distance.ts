@@ -202,11 +202,16 @@ export async function runGraphDistanceCollection(options?: {
     minChannels?: number;
     minCapacity?: number;
 }): Promise<number> {
-    console.log('Collecting graph distance candidates...');
-
     const candidates = await collectGraphDistanceCandidates(options);
 
     console.log(`Found ${candidates.length} candidates at distance >= ${options?.minDistance ?? 2}`);
+
+    // Clear old graph candidates
+    const { removeCandidatesBySource } = await import('../storage.js');
+    const removed = removeCandidatesBySource('graph_distance');
+    if (removed > 0) {
+        console.log(`Cleared ${removed} old graph candidates`);
+    }
 
     // Save each candidate
     for (const candidate of candidates) {

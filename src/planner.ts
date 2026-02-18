@@ -7,7 +7,7 @@
 
 import { loadCandidates, saveCandidates } from './storage.js';
 import { loadConfig } from './config.js';
-import { REJECTION_CONFIG, type ChannelCandidate, type OpenPlan, type PlannedChannel } from './models.js';
+import { REJECTION_CONFIG, ANCHOR_RESERVE, type ChannelCandidate, type OpenPlan, type PlannedChannel } from './models.js';
 
 export interface PlanOptions {
     budget: number;
@@ -69,12 +69,17 @@ export function createPlan(options: PlanOptions): OpenPlan {
     // Filter out candidates with minimum > maxSize
     candidates = candidates.filter(c => getEffectiveMinimum(c, defaultSize) <= maxSize);
 
-    // Sort by effective minimum (lowest first to maximize channel count)
-    candidates.sort((a, b) => {
-        const minA = getEffectiveMinimum(a, defaultSize);
-        const minB = getEffectiveMinimum(b, defaultSize);
-        return minA - minB;
-    });
+    // Prioritize manual candidates first, then by effective minimum (lowest first to maximize channel count)
+  candidates.sort((a, b) => {
+    // Manual source always comes before others
+    if (a.source === 'manual' && b.source !== 'manual') return -1;
+    if (a.source !== 'manual' && b.source === 'manual') return 1;
+
+    // Then sort by minimum size
+    const minA = getEffectiveMinimum(a, defaultSize);
+    const minB = getEffectiveMinimum(b, defaultSize);
+    return minA - minB;
+  });
 
     // Allocate budget
     const plannedChannels: PlannedChannel[] = [];
@@ -82,9 +87,10 @@ export function createPlan(options: PlanOptions): OpenPlan {
 
     for (const candidate of candidates) {
         const effectiveMin = getEffectiveMinimum(candidate, defaultSize);
+        const requiredAmount = effectiveMin + ANCHOR_RESERVE;
 
-        // Can we afford this channel?
-        if (effectiveMin > remaining) {
+        // Can we afford this channel + its anchor reserve?
+        if (requiredAmount > remaining) {
             continue;  // Skip, but try smaller candidates next
         }
 
@@ -96,10 +102,10 @@ export function createPlan(options: PlanOptions): OpenPlan {
             isMinimumEnforced: effectiveMin > defaultSize,
         });
 
-        remaining -= effectiveMin;
+        remaining -= requiredAmount;
 
         // Stop if we can't afford even the default size anymore
-        if (remaining < defaultSize) {
+        if (remaining < (defaultSize + ANCHOR_RESERVE)) {
             break;
         }
     }
@@ -208,6 +214,7 @@ export function formatPlan(plan: OpenPlan): string {
 
     lines.push('');
     lines.push(`Budget: ${formatSats(plan.budget)} | Default: ${formatSats(plan.defaultSize)} | Max: ${formatSats(plan.maxSize)}`);
+    lines.push(`Note: Each channel includes an additional ${formatSats(ANCHOR_RESERVE)} anchor reserve.`);
     lines.push('─'.repeat(80));
     lines.push('  #  Pubkey          Amount      Notes            Alias');
     lines.push('─'.repeat(80));

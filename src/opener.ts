@@ -17,7 +17,25 @@ import type { OpenPlan, OpenResult, OpenHistory, RejectionReason } from './model
  * Parse LND error messages to extract rejection reason
  */
 export function parseOpenError(error: unknown): { reason: RejectionReason; minSize?: number; details: string } {
-    const message = error instanceof Error ? error.message : String(error);
+    let message = '';
+
+    if (error instanceof Error) {
+        message = error.message;
+    } else if (typeof error === 'object' && error !== null) {
+        try {
+            message = JSON.stringify(error);
+        } catch {
+            message = String(error);
+        }
+    } else {
+        message = String(error);
+    }
+
+    // Handle common ln-service/lnd error arrays [code, message, {details}]
+    if (Array.isArray(error) && error.length >= 2) {
+        const details = error[2] ? JSON.stringify(error[2]) : '';
+        message = `${error[0]} ${error[1]} ${details}`;
+    }
 
     // Check for minimum channel size
     const minSizeMatch = message.match(/channel size.*?(\d+)/i) ||

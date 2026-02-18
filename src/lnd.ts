@@ -65,6 +65,16 @@ export async function getOwnPubkey(): Promise<string> {
     return info.public_key;
 }
 
+// Get on-chain balance
+export async function getChainBalance(): Promise<{ confirmed: number; unconfirmed: number }> {
+    const { lnd } = await connectLnd();
+    const result = await lnService.getChainBalance({ lnd });
+    return {
+        confirmed: result.chain_confirmed_balance,
+        unconfirmed: result.chain_unconfirmed_balance,
+    };
+}
+
 // Get open channels
 export async function getChannels(): Promise<Channel[]> {
     const { lnd } = await connectLnd();

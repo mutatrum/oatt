@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getConfigDir, ensureConfigDir } from './config.js';
-import type { ChannelCandidate, OpenHistory, Rejection } from './models.js';
+import type { ChannelCandidate, OpenHistory, Rejection, CandidateSource } from './models.js';
 
 // File paths
 function getCandidatesPath(): string {
@@ -122,6 +122,40 @@ export function addRejection(pubkey: string, rejection: Rejection): void {
         }
 
         saveCandidates(candidates);
+    }
+}
+
+/**
+ * Remove candidates by source
+ */
+export function removeCandidatesBySource(source: CandidateSource): number {
+    const candidates = loadCandidates();
+    const filtered = candidates.filter(c => c.source !== source);
+    const removedCount = candidates.length - filtered.length;
+    
+    if (removedCount > 0) {
+        saveCandidates(filtered);
+    }
+    
+    return removedCount;
+}
+
+/**
+ * Sync candidate node info
+ */
+export async function syncCandidateInfo(pubkey: string): Promise<void> {
+    const { getNodeInfo } = await import('./lnd.js');
+    const info = await getNodeInfo(pubkey);
+    
+    if (info) {
+        upsertCandidate({
+            pubkey,
+            alias: info.alias,
+            channels: info.channels,
+            capacitySats: info.capacitySats,
+            lastUpdate: info.lastUpdate,
+            addedAt: new Date(), // Reset addedAt for fresh sync?
+        } as any);
     }
 }
 
