@@ -47,13 +47,20 @@ export function parseOpenError(error: unknown): {
     const pubkey = pubkeyMatch ? pubkeyMatch[0].toLowerCase() : undefined;
 
     // Check for minimum channel size / capacity requirement
-    const minSizeMatch = message.match(/channel size.*?(\d+)/i) ||
-        message.match(/minimum.*?(\d+)/i) ||
-        message.match(/at least.*?(\d+)/i) ||
-        message.match(/is below (\d+)sat/i);
+    const minSizeMatch = message.match(/channel size.*?(\d+\.?\d*)/i) ||
+        message.match(/minimum.*?(\d+\.?\d*)/i) ||
+        message.match(/at least.*?(\d+\.?\d*)/i) ||
+        message.match(/is below (\d+\.?\d*)(?:sat| BTC)/i);
 
     if (minSizeMatch) {
-        let minSize = parseInt(minSizeMatch[1]);
+        let minSizeText = minSizeMatch[1];
+        let minSize = 0;
+
+        if (message.includes(minSizeText + ' BTC')) {
+            minSize = Math.round(parseFloat(minSizeText) * 100_000_000);
+        } else {
+            minSize = parseInt(minSizeText.replace(/,/g, ''));
+        }
         
         // Complex case: "funding Xsat ... capacity Ysat, which is below Zsat"
         // We need to figure out the overhead (X - Y) and add it to Z.
