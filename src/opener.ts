@@ -125,8 +125,17 @@ export function parseOpenError(error: unknown): {
         };
     }
 
-    // Check for internal errors
-    if (message.includes('internal') || message.includes('err')) {
+    // Check for remote-side internal errors / cancelations
+    if (message.includes('remote canceled') || message.includes('internal error') || message.includes('funding failed')) {
+        return {
+            reason: 'internal_error',
+            details: message,
+            pubkey,
+        };
+    }
+
+    // Check for generic errors (avoid matching just "err" in JSON by looking for "error" or "Error")
+    if (message.includes('error') || message.includes('Error')) {
         return {
             reason: 'internal_error',
             details: message,

@@ -28,7 +28,7 @@ export const REJECTION_CONFIG: Record<RejectionReason, { retryable: boolean; coo
     custom_requirements: { retryable: false },
     coop_close: { retryable: false },
     batch_failed: { retryable: true, cooldownDays: 0 },
-    internal_error: { retryable: true, cooldownDays: 0 },
+    internal_error: { retryable: true, cooldownDays: 1 },
 };
 
 // Reserve required by LND per channel (e.g. for anchors)
