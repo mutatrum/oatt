@@ -46,14 +46,35 @@ export function parseOpenError(error: unknown): {
     const pubkeyMatch = message.match(/(02|03)[0-9a-fA-F]{64}/);
     const pubkey = pubkeyMatch ? pubkeyMatch[0].toLowerCase() : undefined;
 
-    // Check for minimum channel size
+    // Check for minimum channel size / capacity requirement
     const minSizeMatch = message.match(/channel size.*?(\d+)/i) ||
         message.match(/minimum.*?(\d+)/i) ||
-        message.match(/at least.*?(\d+)/i);
+        message.match(/at least.*?(\d+)/i) ||
+        message.match(/is below (\d+)sat/i);
+
     if (minSizeMatch) {
+        let minSize = parseInt(minSizeMatch[1]);
+        
+        // Complex case: "funding Xsat ... capacity Ysat, which is below Zsat"
+        // We need to figure out the overhead (X - Y) and add it to Z.
+        const fundingMatch = message.match(/funding (\d+)sat/i);
+        const capacityMatch = message.match(/channel capacity is (\d+)sat/i);
+        
+        if (fundingMatch && capacityMatch) {
+            const funding = parseInt(fundingMatch[1]);
+            const capacity = parseInt(capacityMatch[1]);
+            const overhead = funding - capacity;
+            
+            if (overhead > 0) {
+                // Adjust minSize to account for peer's overhead calculation
+                // Add a 10,000 sat "safety buffer" to prevent rounding issues
+                minSize = minSize + overhead + 10000;
+            }
+        }
+
         return {
             reason: 'min_channel_size',
-            minSize: parseInt(minSizeMatch[1]),
+            minSize,
             details: message,
             pubkey,
         };
