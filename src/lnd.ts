@@ -161,12 +161,13 @@ export function toChannelHistory(closedChannel: ClosedChannel): ChannelHistory {
 }
 
 // Connect to a peer
-export async function connectPeer(pubkey: string, socket: string): Promise<void> {
+export async function connectPeer(pubkey: string, socket: string, timeout?: number): Promise<void> {
     const { lnd } = await connectLnd();
     await lnService.addPeer({
         lnd,
         public_key: pubkey,
         socket,
+        timeout,
     });
 }
 

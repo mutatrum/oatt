@@ -170,6 +170,7 @@ declare module 'ln-service' {
         public_key: string;
         socket: string;
         is_temporary?: boolean;
+        timeout?: number;
     }): Promise<void>;
 
     export function getPeers(args: {

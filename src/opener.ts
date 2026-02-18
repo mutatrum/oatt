@@ -187,55 +187,59 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     const infoMap = new Map(nodeInfos.map(n => [n.pubkey, n.info]));
     const connectedSet = new Set(connectedPeers);
 
-    const viableAttempts: ChannelOpenAttempt[] = [];
-    for (const attempt of attempts) {
-        const info = infoMap.get(attempt.pubkey);
-        
-        // Is node already connected?
+    // Verify all peers concurrently
+    const verificationResults = await Promise.all(attempts.map(async (attempt) => {
+        // Already connected?
         if (connectedSet.has(attempt.pubkey)) {
-            viableAttempts.push(attempt);
-            continue;
+            return { attempt, success: true };
         }
 
+        const info = infoMap.get(attempt.pubkey);
         if (!info || info.addresses.length === 0) {
             const reason: RejectionReason = info ? 'no_address' : 'not_online';
             const errorMsg = info ? 'Node has no addresses in graph' : 'Node not found in graph';
-            
+            return { attempt, success: false, reason, errorMsg };
+        }
+
+        // Try all addresses for this peer
+        let lastError = 'Failed to connect';
+        for (const address of info.addresses) {
+            try {
+                // Use a 15 second timeout for each attempt
+                await connectPeer(attempt.pubkey, address, 15000);
+                return { attempt, success: true };
+            } catch (err) {
+                lastError = parseOpenError(err).details;
+            }
+        }
+
+        return { 
+            attempt, 
+            success: false, 
+            reason: 'failed_to_connect' as RejectionReason, 
+            errorMsg: `Failed to connect: ${lastError}` 
+        };
+    }));
+
+    const viableAttempts: ChannelOpenAttempt[] = [];
+    for (const res of verificationResults) {
+        if (res.success) {
+            viableAttempts.push(res.attempt);
+        } else {
             results.push({
-                pubkey: attempt.pubkey,
+                pubkey: res.attempt.pubkey,
                 success: false,
-                error: errorMsg,
-                rejectionReason: reason,
+                error: res.errorMsg!,
+                rejectionReason: res.reason!,
             });
 
-            addRejection(attempt.pubkey, {
+            addRejection(res.attempt.pubkey, {
                 date: new Date(),
-                reason,
-                details: errorMsg,
+                reason: res.reason!,
+                details: res.errorMsg!,
             });
             
-            log(`✗ Skipping ${attempt.alias}: ${errorMsg}`);
-        } else {
-            // Proactively try to connect to each viable peer
-            try {
-                // Try the first address
-                await connectPeer(attempt.pubkey, info.addresses[0]);
-                viableAttempts.push(attempt);
-            } catch (err) {
-                const errorMsg = `Failed to connect: ${parseOpenError(err).details}`;
-                results.push({
-                    pubkey: attempt.pubkey,
-                    success: false,
-                    error: errorMsg,
-                    rejectionReason: 'failed_to_connect',
-                });
-                addRejection(attempt.pubkey, {
-                    date: new Date(),
-                    reason: 'failed_to_connect',
-                    details: errorMsg,
-                });
-                log(`✗ Skipping ${attempt.alias}: ${errorMsg}`);
-            }
+            log(`✗ Skipping ${res.attempt.alias}: ${res.errorMsg}`);
         }
     }
 
