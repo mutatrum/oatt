@@ -159,3 +159,20 @@ export function toChannelHistory(closedChannel: ClosedChannel): ChannelHistory {
         feesEarned: 0, // Will be filled from forwarding history
     };
 }
+
+// Connect to a peer
+export async function connectPeer(pubkey: string, socket: string): Promise<void> {
+    const { lnd } = await connectLnd();
+    await lnService.addPeer({
+        lnd,
+        public_key: pubkey,
+        socket,
+    });
+}
+
+// Get connected peers
+export async function getConnectedPeers(): Promise<string[]> {
+    const { lnd } = await connectLnd();
+    const result = await lnService.getPeers({ lnd });
+    return result.peers.map(p => p.public_key);
+}

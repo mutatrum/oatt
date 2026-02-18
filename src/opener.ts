@@ -167,10 +167,76 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         return results;
     }
 
-    // Step 1: Initiate pending channels with all peers
-    log(`Opening ${attempts.length} channels in a single transaction...`);
+    // Step 0: Pre-verify connections and fetch fresh info
+    log('Step 1/5: Verifying peer connectivity...');
+    const nodeInfos = await Promise.all(
+        attempts.map(async (a) => {
+            try {
+                const info = await getNodeInfo(a.pubkey);
+                return { pubkey: a.pubkey, info };
+            } catch {
+                return { pubkey: a.pubkey, info: null };
+            }
+        })
+    );
+    const infoMap = new Map(nodeInfos.map(n => [n.pubkey, n.info]));
 
-    const channelsToOpen: lnService.OpenChannelsChannel[] = attempts.map(a => ({
+    const viableAttempts: ChannelOpenAttempt[] = [];
+    for (const attempt of attempts) {
+        const info = infoMap.get(attempt.pubkey);
+        if (!info || info.addresses.length === 0) {
+            const reason: RejectionReason = info ? 'no_address' : 'not_online';
+            const errorMsg = info ? 'Node has no addresses in graph' : 'Node not found in graph';
+            
+            results.push({
+                pubkey: attempt.pubkey,
+                success: false,
+                error: errorMsg,
+                rejectionReason: reason,
+            });
+
+            addRejection(attempt.pubkey, {
+                date: new Date(),
+                reason,
+                details: errorMsg,
+            });
+            
+            log(`✗ Skipping ${attempt.alias}: ${errorMsg}`);
+        } else {
+            // Proactively try to connect to each viable peer
+            const { connectPeer } = await import('./lnd.js');
+            try {
+                // Try the first address
+                await connectPeer(attempt.pubkey, info.addresses[0]);
+                viableAttempts.push(attempt);
+            } catch (err) {
+                const errorMsg = `Failed to connect: ${parseOpenError(err).details}`;
+                results.push({
+                    pubkey: attempt.pubkey,
+                    success: false,
+                    error: errorMsg,
+                    rejectionReason: 'failed_to_connect',
+                });
+                addRejection(attempt.pubkey, {
+                    date: new Date(),
+                    reason: 'failed_to_connect',
+                    details: errorMsg,
+                });
+                log(`✗ Skipping ${attempt.alias}: ${errorMsg}`);
+            }
+        }
+    }
+
+    if (viableAttempts.length === 0) {
+        log('No viable nodes left to open in this batch.');
+        saveHistory(plan, results);
+        return results;
+    }
+
+    // Step 1: Initiate pending channels with remaining peers
+    log(`Step 2/5: Initiating ${viableAttempts.length} channel opens...`);
+
+    const channelsToOpen: lnService.OpenChannelsChannel[] = viableAttempts.map(a => ({
         capacity: a.amount,
         partner_public_key: a.pubkey,
     }));
@@ -178,7 +244,6 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     let pendingChannels: lnService.PendingChannel[];
 
     try {
-        log('Step 1/4: Initiating channel opens...');
         const result = await lnService.openChannels({
             lnd,
             channels: channelsToOpen,
@@ -191,20 +256,19 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         log(`Batch open failed: ${parsed.details}`);
 
         // Record results and rejections
-        for (const attempt of attempts) {
+        for (const attempt of viableAttempts) {
             // Is this specific node the cause of the failure?
-            // If no specific pubkey mentioned, we conservatively treat all as failed but don't record rejections for all.
             const isImplicated = !parsed.pubkey || parsed.pubkey === attempt.pubkey;
 
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,
-                error: isImplicated ? parsed.details : 'Batch cancelled due to other peer failure',
-                rejectionReason: isImplicated ? parsed.reason : 'internal_error',
+                error: isImplicated ? parsed.details : 'Batch cancelled due to node being offline or other failure',
+                rejectionReason: isImplicated ? parsed.reason : 'batch_failed',
                 detectedMinimum: isImplicated ? parsed.minSize : undefined,
             });
 
-            // Only record rejection if this specific node was named in the error
+            // Only record rejection for retry logic if this specific node was named
             if (isImplicated) {
                 addRejection(attempt.pubkey, {
                     date: new Date(),
@@ -220,13 +284,12 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     }
 
     // Match pending channels to our attempts
-    // pending channels are in same order as channelsToOpen
     for (let i = 0; i < pendingChannels.length; i++) {
-        attempts[i].pendingId = pendingChannels[i].id;
-        attempts[i].address = pendingChannels[i].address;
+        viableAttempts[i].pendingId = pendingChannels[i].id;
+        viableAttempts[i].address = pendingChannels[i].address;
     }
 
-    log(`Step 2/4: Creating funding PSBT for ${pendingChannels.length} outputs...`);
+    log(`Step 3/5: Creating funding PSBT for ${pendingChannels.length} outputs...`);
 
     // Step 2: Create PSBT with all outputs
     const outputs = pendingChannels.map(p => ({
@@ -248,9 +311,9 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         log(`Failed to create PSBT: ${parsed.details}`);
 
         // Cancel all pending channels
-        await cancelAllPending(lnd, attempts, log);
+        await cancelAllPending(lnd, viableAttempts, log);
 
-        for (const attempt of attempts) {
+        for (const attempt of viableAttempts) {
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,
@@ -264,7 +327,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     }
 
     // Step 3: Sign the PSBT
-    log('Step 3/4: Signing PSBT...');
+    log('Step 4/5: Signing PSBT...');
 
     let signedPsbt: string;
     try {
@@ -277,9 +340,9 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         const parsed = parseOpenError(error);
         log(`Failed to sign PSBT: ${parsed.details}`);
 
-        await cancelAllPending(lnd, attempts, log);
+        await cancelAllPending(lnd, viableAttempts, log);
 
-        for (const attempt of attempts) {
+        for (const attempt of viableAttempts) {
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,
@@ -293,9 +356,9 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     }
 
     // Step 4: Fund pending channels with signed PSBT
-    log('Step 4/4: Broadcasting funding transaction...');
+    log('Step 5/5: Broadcasting funding transaction...');
 
-    const pendingIds = attempts
+    const pendingIds = viableAttempts
         .filter(a => a.pendingId)
         .map(a => a.pendingId!);
 
@@ -307,7 +370,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         });
 
         // All channels funded successfully
-        for (const attempt of attempts) {
+        for (const attempt of viableAttempts) {
             results.push({
                 pubkey: attempt.pubkey,
                 success: true,
@@ -315,17 +378,13 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             });
         }
 
-        log(`✓ Funding transaction broadcast! ${attempts.length} channels opening.`);
+        log(`✓ Funding transaction broadcast! ${viableAttempts.length} channels opening.`);
     } catch (error) {
         // Final funding failed
         const parsed = parseOpenError(error);
         log(`Failed to broadcast funding: ${parsed.details}`);
 
-        // Note: At this point, the channels might be in a weird state
-        // The transaction might have been broadcast but some channels might have failed
-        // We should check pending channels status here
-
-        for (const attempt of attempts) {
+        for (const attempt of viableAttempts) {
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,

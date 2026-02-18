@@ -13,6 +13,7 @@ export type RejectionReason =
     | 'no_routing'
     | 'custom_requirements'
     | 'coop_close'
+    | 'batch_failed'
     | 'internal_error';
 
 // Retry configuration for each rejection type
@@ -26,6 +27,7 @@ export const REJECTION_CONFIG: Record<RejectionReason, { retryable: boolean; coo
     no_routing: { retryable: false },
     custom_requirements: { retryable: false },
     coop_close: { retryable: false },
+    batch_failed: { retryable: true, cooldownDays: 0 },
     internal_error: { retryable: true, cooldownDays: 0 },
 };
 

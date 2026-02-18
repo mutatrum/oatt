@@ -409,6 +409,21 @@ program
                             onProgress: (msg: string) => console.log(msg),
                         });
                         console.log(formatResults(results));
+
+                        const failures = results.filter(r => !r.success);
+                        if (failures.length > 0) {
+                            const { retry } = await inquirer.default.prompt([{
+                                type: 'confirm',
+                                name: 'retry',
+                                message: 'Batch had failures. Refresh plan and retry?',
+                                default: true,
+                            }]);
+                            if (retry) {
+                                plan = createPlan({ budget, defaultSize, maxSize });
+                                console.log(formatPlan(plan));
+                                continue;
+                            }
+                        }
                         done = true;
                     }
                     break;
