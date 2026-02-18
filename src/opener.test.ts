@@ -56,6 +56,24 @@ describe('parseOpenError', () => {
         expect(result.reason).toBe('not_online');
     });
 
+    it('should handle the specific complex BTC error from the user', () => {
+        const error = 'remote canceled funding, possibly timed out: received funding error from 03b6f613e88bd874177c28c6ad83b3baba43c4c656f56be1f8df84669556054b79: chan_id=acdf68f377556f33c6d891fd299286bd6bdaf6ebe1b04275be44737647f82c0d, err=chan size of 0.01000000 BTC is below min chan size of 0.05000000 BTC';
+        const result = parseOpenError(error);
+        
+        expect(result.reason).toBe('min_channel_size');
+        expect(result.minSize).toBe(5_000_000);
+        expect(result.pubkey).toBe('03b6f613e88bd874177c28c6ad83b3baba43c4c656f56be1f8df84669556054b79');
+    });
+
+    it('should handle the exact stringified error from candidates.json', () => {
+        const error = '503 UnexpectedErrorOpeningChannels {"err":{"code":2,"details":"remote canceled funding, possibly timed out: received funding error from 03b6f613e88bd874177c28c6ad83b3baba43c4c656f56be1f8df84669556054b79: chan_id=acdf68f377556f33c6d891fd299286bd6bdaf6ebe1b04275be44737647f82c0d, err=chan size of 0.01000000 BTC is below min chan size of 0.05000000 BTC","metadata":{"content-type":["application/grpc"]}}}';
+        const result = parseOpenError(error);
+        
+        expect(result.reason).toBe('min_channel_size');
+        expect(result.minSize).toBe(5_000_000);
+        expect(result.pubkey).toBe('03b6f613e88bd874177c28c6ad83b3baba43c4c656f56be1f8df84669556054b79');
+    });
+
     it('should avoid over-matching "err" in JSON by looking for specific error terms', () => {
         // If we just matched "err", this would be an internal_error
         const error = { some_field: 'cherry' }; 

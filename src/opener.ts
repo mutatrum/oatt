@@ -9,8 +9,10 @@
  */
 
 import * as lnService from 'ln-service';
+import chalk from 'chalk';
 import { connectLnd, getNodeInfo } from './lnd.js';
 import { addRejection, saveOpenHistory } from './storage.js';
+import { formatSats } from './planner.js';
 import type { OpenPlan, OpenResult, OpenHistory, RejectionReason } from './models.js';
 
 /**
@@ -46,108 +48,110 @@ export function parseOpenError(error: unknown): {
     const pubkeyMatch = message.match(/(02|03)[0-9a-fA-F]{64}/);
     const pubkey = pubkeyMatch ? pubkeyMatch[0].toLowerCase() : undefined;
 
-    // Check for minimum channel size / capacity requirement
-    const minSizeMatch = message.match(/minimum.*?(\d+\.?\d*)/i) ||
-        message.match(/at least.*?(\d+\.?\d*)/i) ||
-        message.match(/is below (?:min chan size of )?.*?(\d+\.?\d*)(?:sat| BTC)/i) ||
-        message.match(/(?:channel|chan) size.*?(\d+\.?\d*)/i);
-
-    if (minSizeMatch) {
-        let minSizeText = minSizeMatch[1];
-        let minSize = 0;
-
-        if (message.includes(minSizeText + ' BTC')) {
-            minSize = Math.round(parseFloat(minSizeText) * 100_000_000);
-        } else {
-            minSize = parseInt(minSizeText.replace(/,/g, ''));
-        }
-        
-        // Complex case: "funding Xsat ... capacity Ysat, which is below Zsat"
-        // We need to figure out the overhead (X - Y) and add it to Z.
-        const fundingMatch = message.match(/funding (\d+)sat/i);
-        const capacityMatch = message.match(/channel capacity is (\d+)sat/i);
-        
-        if (fundingMatch && capacityMatch) {
-            const funding = parseInt(fundingMatch[1]);
-            const capacity = parseInt(capacityMatch[1]);
-            const overhead = funding - capacity;
-            
-            if (overhead > 0) {
-                // Adjust minSize to account for peer's overhead calculation
-                // Add a 10,000 sat "safety buffer" to prevent rounding issues
-                minSize = minSize + overhead + 10000;
+    // Define specific error patterns with their associated reasons and logic
+    const patterns = [
+        // Minimum channel size / capacity (priority 1: specific BTC errors)
+        {
+            reason: 'min_channel_size' as RejectionReason,
+            regex: /is below (?:min chan size of )?.*?(\d+\.?\d*)\s*BTC/i,
+            process: (match: RegExpMatchArray) => {
+                const btc = parseFloat(match[1]);
+                return { minSize: Math.round(btc * 100_000_000) };
             }
+        },
+        // Minimum channel size / capacity (priority 2: specific sat errors)
+        {
+            reason: 'min_channel_size' as RejectionReason,
+            regex: /is below .*?(\d+)\s*sat/i,
+            process: (match: RegExpMatchArray) => ({ minSize: parseInt(match[1]) })
+        },
+        // Minimum channel size / capacity (legacy generic sat)
+        {
+            reason: 'min_channel_size' as RejectionReason,
+            regex: /(?:minimum|at least).*?(\d+)/i,
+            process: (match: RegExpMatchArray) => ({ minSize: parseInt(match[1]) })
+        },
+        // General capacity error (fallback)
+        {
+            reason: 'min_channel_size' as RejectionReason,
+            regex: /(?:channel|chan) size.*?(\d+\.?\d*)/i,
+            process: (match: RegExpMatchArray) => {
+                const val = match[1];
+                if (message.includes(val + ' BTC')) {
+                    return { minSize: Math.round(parseFloat(val) * 100_000_000) };
+                }
+                return { minSize: parseInt(val.replace(/,/g, '')) };
+            }
+        },
+        // Connection issues (Tor, proxy, timeouts)
+        {
+            reason: 'failed_to_connect' as RejectionReason,
+            regex: /connect|dial|timeout|tor|proxy/i
+        },
+        // Offline
+        {
+            reason: 'not_online' as RejectionReason,
+            regex: /offline|not online/i
+        },
+        // No address/route
+        {
+            reason: 'no_address' as RejectionReason,
+            regex: /no address|no route/i
+        },
+        // Explicit rejection
+        {
+            reason: 'rejected' as RejectionReason,
+            regex: /reject|denied|refused/i
+        },
+        // Anchor channels
+        {
+            reason: 'no_anchors' as RejectionReason,
+            regex: /anchor|feature/i
+        },
+        // Remote internal errors
+        {
+            reason: 'internal_error' as RejectionReason,
+            regex: /remote canceled|internal error|funding failed/i
+        },
+        // Generic error catch-all
+        {
+            reason: 'internal_error' as RejectionReason,
+            regex: /error|Error/
         }
+    ];
 
-        return {
-            reason: 'min_channel_size',
-            minSize,
-            details: message,
-            pubkey,
-        };
-    }
+    for (const pattern of patterns) {
+        const match = message.match(pattern.regex);
+        if (match) {
+            let extra = {};
+            if (pattern.process) {
+                extra = pattern.process(match);
+            }
 
-    // Check for anchor channels
-    if (message.includes('anchor') || message.includes('feature')) {
-        return {
-            reason: 'no_anchors',
-            details: message,
-            pubkey,
-        };
-    }
+            // Special overhead calculation logic for specific capacity errors
+            if (pattern.reason === 'min_channel_size') {
+                const fundingMatch = message.match(/funding (\d+)sat/i);
+                const capacityMatch = message.match(/channel capacity is (\d+)sat/i);
+                
+                if (fundingMatch && capacityMatch) {
+                    const funding = parseInt(fundingMatch[1]);
+                    const capacity = parseInt(capacityMatch[1]);
+                    const overhead = funding - capacity;
+                    
+                    if (overhead > 0) {
+                        const minSize = (extra as any).minSize || 0;
+                        (extra as any).minSize = minSize + overhead + 10000;
+                    }
+                }
+            }
 
-    // Check for connection issues
-    if (message.includes('connect') || message.includes('dial') || message.includes('timeout') || message.includes('tor') || message.includes('proxy')) {
-        return {
-            reason: 'failed_to_connect',
-            details: message,
-            pubkey,
-        };
-    }
-
-    // Check for offline
-    if (message.includes('offline') || message.includes('not online')) {
-        return {
-            reason: 'not_online',
-            details: message,
-            pubkey,
-        };
-    }
-
-    // Check for no address
-    if (message.includes('no address') || message.includes('no route')) {
-        return {
-            reason: 'no_address',
-            details: message,
-            pubkey,
-        };
-    }
-
-    // Check for explicit rejection
-    if (message.includes('reject') || message.includes('denied') || message.includes('refused')) {
-        return {
-            reason: 'rejected',
-            details: message,
-            pubkey,
-        };
-    }
-
-    // Check for remote-side internal errors / cancelations
-    if (message.includes('remote canceled') || message.includes('internal error') || message.includes('funding failed')) {
-        return {
-            reason: 'internal_error',
-            details: message,
-            pubkey,
-        };
-    }
-
-    // Check for generic errors (avoid matching just "err" in JSON by looking for "error" or "Error")
-    if (message.includes('error') || message.includes('Error')) {
-        return {
-            reason: 'internal_error',
-            details: message,
-            pubkey,
-        };
+            return {
+                reason: pattern.reason,
+                details: message,
+                pubkey,
+                ...extra,
+            };
+        }
     }
 
     // Default to rejected
@@ -324,9 +328,14 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         });
         pendingChannels = result.pending;
     } catch (error) {
-        // If batch open fails entirely, try to identify which channel(s) failed
         const parsed = parseOpenError(error);
         log(`Batch open failed: ${parsed.details}`);
+        
+        let reasonStr = `Reason: ${parsed.reason}`;
+        if (parsed.minSize) {
+            reasonStr += ` (Detected minimum: ${formatSats(parsed.minSize)})`;
+        }
+        log(chalk.yellow(`ℹ ${reasonStr}`));
 
         // Record results and rejections
         for (const attempt of viableAttempts) {
@@ -391,7 +400,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 pubkey: attempt.pubkey,
                 success: false,
                 error: `Funding failed: ${parsed.details}`,
-                rejectionReason: 'internal_error',
+                rejectionReason: parsed.reason,
             });
         }
 
@@ -420,7 +429,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 pubkey: attempt.pubkey,
                 success: false,
                 error: `Signing failed: ${parsed.details}`,
-                rejectionReason: 'internal_error',
+                rejectionReason: parsed.reason,
             });
         }
 
@@ -462,7 +471,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 pubkey: attempt.pubkey,
                 success: false,
                 error: `Broadcast failed: ${parsed.details}`,
-                rejectionReason: 'internal_error',
+                rejectionReason: parsed.reason,
             });
         }
     }
