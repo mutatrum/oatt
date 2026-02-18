@@ -223,9 +223,9 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                     
                     // Specific logging for Tor proxy errors
                     if (lastError.includes('tor general error')) {
-                        log(`    - ${address} failed: Tor proxy error (check your Tor status)`);
+                        log(`    - ${attempt.alias} | ${address} failed: Tor proxy error (check your Tor status)`);
                     } else {
-                        log(`    - ${address} failed: ${lastError}`);
+                        log(`    - ${attempt.alias} | ${address} failed: ${lastError}`);
                     }
                 }
             }
