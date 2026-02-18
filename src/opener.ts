@@ -47,10 +47,10 @@ export function parseOpenError(error: unknown): {
     const pubkey = pubkeyMatch ? pubkeyMatch[0].toLowerCase() : undefined;
 
     // Check for minimum channel size / capacity requirement
-    const minSizeMatch = message.match(/channel size.*?(\d+\.?\d*)/i) ||
-        message.match(/minimum.*?(\d+\.?\d*)/i) ||
+    const minSizeMatch = message.match(/minimum.*?(\d+\.?\d*)/i) ||
         message.match(/at least.*?(\d+\.?\d*)/i) ||
-        message.match(/is below (\d+\.?\d*)(?:sat| BTC)/i);
+        message.match(/is below (?:min chan size of )?.*?(\d+\.?\d*)(?:sat| BTC)/i) ||
+        message.match(/(?:channel|chan) size.*?(\d+\.?\d*)/i);
 
     if (minSizeMatch) {
         let minSizeText = minSizeMatch[1];
@@ -97,7 +97,7 @@ export function parseOpenError(error: unknown): {
     }
 
     // Check for connection issues
-    if (message.includes('connect') || message.includes('dial') || message.includes('timeout')) {
+    if (message.includes('connect') || message.includes('dial') || message.includes('timeout') || message.includes('tor') || message.includes('proxy')) {
         return {
             reason: 'failed_to_connect',
             details: message,

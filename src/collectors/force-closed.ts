@@ -113,7 +113,9 @@ export async function collectForceClosedCandidates(): Promise<ChannelCandidate[]
         const { isCandidate, reason } = analyzePeerHistory(channels);
 
         if (!isCandidate) {
-            console.log(`Skipping ${pubkey.slice(0, 12)}...: ${reason}`);
+            if (reason !== 'no remote force close') {
+                console.log(`Skipping ${pubkey.slice(0, 12)}...: ${reason}`);
+            }
             continue;
         }
 
