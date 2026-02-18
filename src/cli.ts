@@ -332,7 +332,8 @@ program
             if (options.budget) {
                 budget = parseInt(options.budget);
             } else {
-                console.error(chalk.red('Error fetching chain balance. Please specify --budget explicitly.'));
+                console.error(chalk.red('Error fetching chain balance:'), error);
+                console.log(chalk.yellow('\nTip: You can specify a budget explicitly with --budget <sats>'));
                 process.exit(1);
             }
         }
