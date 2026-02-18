@@ -201,10 +201,26 @@ function formatCandidate(c: ChannelCandidate, showDetails: boolean): string {
     let line = `${pubkey}  ${channels}  ${capacity}  ${distance}  ${minSize}  ${source}  ${statusStr}  ${alias}`;
 
     if (showDetails && c.rejections.length > 0) {
-        const rejectionDetails = c.rejections
-            .map(r => `    ${chalk.gray(new Date(r.date).toLocaleDateString())} ${chalk.yellow(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}`)
-            .join('\n');
-        line += '\n' + rejectionDetails;
+        const rejectionLines = c.rejections.map(r => {
+            const config = REJECTION_CONFIG[r.reason];
+            let cooldownInfo = '';
+            
+            if (config.retryable && config.cooldownDays) {
+                const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
+                const elapsedMs = Date.now() - new Date(r.date).getTime();
+                const remainingMs = cooldownMs - elapsedMs;
+                
+                if (remainingMs > 0) {
+                    const h = Math.floor(remainingMs / (60 * 60 * 1000));
+                    const hoursStr = h > 0 ? `${h}h ` : '';
+                    const m = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+                    cooldownInfo = chalk.cyan(` [Active Cooldown: ${hoursStr}${m}m remaining]`);
+                }
+            }
+            
+            return `    ${chalk.gray(new Date(r.date).toLocaleDateString())} ${chalk.yellow(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}${cooldownInfo}`;
+        });
+        line += '\n' + rejectionLines.join('\n');
     }
 
     return line;
