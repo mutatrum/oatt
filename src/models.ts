@@ -20,7 +20,7 @@ export type RejectionReason =
 export const REJECTION_CONFIG: Record<RejectionReason, { retryable: boolean; cooldownDays?: number }> = {
     min_channel_size: { retryable: true },  // Retry with increased amount
     no_anchors: { retryable: false },
-    failed_to_connect: { retryable: true, cooldownDays: 7 },
+    failed_to_connect: { retryable: true, cooldownDays: 1 },
     not_online: { retryable: true, cooldownDays: 7 },
     no_address: { retryable: false },
     rejected: { retryable: false },

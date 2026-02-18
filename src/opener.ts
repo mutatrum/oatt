@@ -169,21 +169,34 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
 
     // Step 0: Pre-verify connections and fetch fresh info
     log('Step 1/5: Verifying peer connectivity...');
-    const nodeInfos = await Promise.all(
-        attempts.map(async (a) => {
-            try {
-                const info = await getNodeInfo(a.pubkey);
-                return { pubkey: a.pubkey, info };
-            } catch {
-                return { pubkey: a.pubkey, info: null };
-            }
-        })
-    );
+    const { getConnectedPeers, connectPeer } = await import('./lnd.js');
+    const [nodeInfos, connectedPeers] = await Promise.all([
+        Promise.all(
+            attempts.map(async (a) => {
+                try {
+                    const info = await getNodeInfo(a.pubkey);
+                    return { pubkey: a.pubkey, info };
+                } catch {
+                    return { pubkey: a.pubkey, info: null };
+                }
+            })
+        ),
+        getConnectedPeers()
+    ]);
+    
     const infoMap = new Map(nodeInfos.map(n => [n.pubkey, n.info]));
+    const connectedSet = new Set(connectedPeers);
 
     const viableAttempts: ChannelOpenAttempt[] = [];
     for (const attempt of attempts) {
         const info = infoMap.get(attempt.pubkey);
+        
+        // Is node already connected?
+        if (connectedSet.has(attempt.pubkey)) {
+            viableAttempts.push(attempt);
+            continue;
+        }
+
         if (!info || info.addresses.length === 0) {
             const reason: RejectionReason = info ? 'no_address' : 'not_online';
             const errorMsg = info ? 'Node has no addresses in graph' : 'Node not found in graph';
@@ -204,7 +217,6 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             log(`✗ Skipping ${attempt.alias}: ${errorMsg}`);
         } else {
             // Proactively try to connect to each viable peer
-            const { connectPeer } = await import('./lnd.js');
             try {
                 // Try the first address
                 await connectPeer(attempt.pubkey, info.addresses[0]);
