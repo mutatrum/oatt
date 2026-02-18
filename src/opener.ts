@@ -187,46 +187,59 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     const infoMap = new Map(nodeInfos.map(n => [n.pubkey, n.info]));
     const connectedSet = new Set(connectedPeers);
 
-    // Verify all peers concurrently
-    const verificationResults = await Promise.all(attempts.map(async (attempt) => {
-        // Already connected?
-        if (connectedSet.has(attempt.pubkey)) {
-            log(`  • ${attempt.alias}: Already connected`);
-            return { attempt, success: true };
-        }
-
-        const info = infoMap.get(attempt.pubkey);
-        if (!info || info.addresses.length === 0) {
-            const reason: RejectionReason = info ? 'no_address' : 'not_online';
-            const errorMsg = info ? 'Node has no addresses in graph' : 'Node not found in graph';
-            return { attempt, success: false, reason, errorMsg };
-        }
-
-        // Try all addresses for this peer
-        log(`  • ${attempt.alias}: Connecting to ${info.addresses.length} addresses...`);
-        let lastError = 'Failed to connect';
-        for (let i = 0; i < info.addresses.length; i++) {
-            const address = info.addresses[i];
-            try {
-                // Use a 15 second timeout for each attempt
-                await connectPeer(attempt.pubkey, address, 15000);
-                log(`  ✓ ${attempt.alias}: Connected`);
+    // Verify all peers in small batches to avoid overwhelming Tor proxy
+    const BATCH_SIZE = 3;
+    const verificationResults: { attempt: ChannelOpenAttempt; success: boolean; reason?: RejectionReason; errorMsg?: string }[] = [];
+    
+    for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
+        const batch = attempts.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(batch.map(async (attempt) => {
+            // Already connected?
+            if (connectedSet.has(attempt.pubkey)) {
+                log(`  • ${attempt.alias}: Already connected`);
                 return { attempt, success: true };
-            } catch (err) {
-                lastError = parseOpenError(err).details;
-                if (info.addresses.length > 1) {
-                    log(`    - Address ${i + 1}/${info.addresses.length} (${address}) failed: ${lastError}`);
+            }
+
+            const info = infoMap.get(attempt.pubkey);
+            if (!info || info.addresses.length === 0) {
+                const reason: RejectionReason = info ? 'no_address' : 'not_online';
+                const errorMsg = info ? 'Node has no addresses in graph' : 'Node not found in graph';
+                return { attempt, success: false, reason, errorMsg };
+            }
+
+            // Try all addresses for this peer
+            log(`  • ${attempt.alias}: Connecting to ${info.addresses.length} addresses...`);
+            let lastError = 'Failed to connect';
+            for (let j = 0; j < info.addresses.length; j++) {
+                const address = info.addresses[j];
+                try {
+                    // Use a 15 second timeout for each attempt
+                    await connectPeer(attempt.pubkey, address, 15000);
+                    log(`  ✓ ${attempt.alias}: Connected`);
+                    return { attempt, success: true };
+                } catch (err) {
+                    const parsed = parseOpenError(err);
+                    lastError = parsed.details;
+                    
+                    // Specific logging for Tor proxy errors
+                    if (lastError.includes('tor general error')) {
+                        log(`    - ${address} failed: Tor proxy error (check your Tor status)`);
+                    } else {
+                        log(`    - ${address} failed: ${lastError}`);
+                    }
                 }
             }
-        }
 
-        return { 
-            attempt, 
-            success: false, 
-            reason: 'failed_to_connect' as RejectionReason, 
-            errorMsg: `Failed to connect: ${lastError}` 
-        };
-    }));
+            return { 
+                attempt, 
+                success: false, 
+                reason: 'failed_to_connect' as RejectionReason, 
+                errorMsg: `Failed to connect: ${lastError}` 
+            };
+        }));
+        
+        verificationResults.push(...batchResults);
+    }
 
     const viableAttempts: ChannelOpenAttempt[] = [];
     for (const res of verificationResults) {

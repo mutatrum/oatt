@@ -27,7 +27,7 @@ declare module 'ln-service' {
         channel_count: number;
         capacity: number;
         updated_at: string;
-        sockets?: string[];
+        sockets?: { socket: string; type: string }[];
         features?: { type: string }[];
     }>;
 

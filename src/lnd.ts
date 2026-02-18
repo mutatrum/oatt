@@ -49,7 +49,7 @@ export async function getNodeInfo(pubkey: string): Promise<NodeInfo | null> {
             channels: info.channel_count,
             capacitySats: info.capacity,
             lastUpdate: new Date(info.updated_at),
-            addresses: info.sockets ?? [],
+            addresses: info.sockets?.map((s: { socket: string }) => s.socket) ?? [],
             features: info.features?.map((f: { type: string }) => f.type) ?? [],
         };
     } catch (error) {
