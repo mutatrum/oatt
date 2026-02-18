@@ -328,7 +328,7 @@ program
     .option('-s, --default-size <sats>', 'Default channel size', '1000000')
     .option('-m, --max-size <sats>', 'Maximum channel size', '10000000')
     .action(async (options) => {
-        const { createPlan, formatPlan, addToPlan, removeFromPlan, resizeInPlan } = await import('./planner.js');
+        const { createPlan, formatPlan, addToPlan, removeFromPlan, resizeInPlan, formatSats } = await import('./planner.js');
         const inquirer = await import('inquirer');
         const { getChainBalance, connectLnd } = await import('./lnd.js');
 
@@ -367,7 +367,6 @@ program
         const maxSize = parseInt(options.maxSize);
 
         let plan = createPlan({ budget, defaultSize, maxSize });
-        const { formatSats } = await import('./planner.js');
 
         // Log adjustments
         plan.channels.forEach(ch => {
