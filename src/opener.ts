@@ -14,9 +14,14 @@ import { addRejection, saveOpenHistory } from './storage.js';
 import type { OpenPlan, OpenResult, OpenHistory, RejectionReason } from './models.js';
 
 /**
- * Parse LND error messages to extract rejection reason
+ * Parse LND error messages to extract rejection reason and implicated pubkey
  */
-export function parseOpenError(error: unknown): { reason: RejectionReason; minSize?: number; details: string } {
+export function parseOpenError(error: unknown): {
+    reason: RejectionReason;
+    minSize?: number;
+    details: string;
+    pubkey?: string;
+} {
     let message = '';
 
     if (error instanceof Error) {
@@ -37,6 +42,10 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         message = `${error[0]} ${error[1]} ${details}`;
     }
 
+    // Extract pubkey if present (66 hex chars starting with 02 or 03)
+    const pubkeyMatch = message.match(/(02|03)[0-9a-fA-F]{64}/);
+    const pubkey = pubkeyMatch ? pubkeyMatch[0].toLowerCase() : undefined;
+
     // Check for minimum channel size
     const minSizeMatch = message.match(/channel size.*?(\d+)/i) ||
         message.match(/minimum.*?(\d+)/i) ||
@@ -46,6 +55,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
             reason: 'min_channel_size',
             minSize: parseInt(minSizeMatch[1]),
             details: message,
+            pubkey,
         };
     }
 
@@ -54,6 +64,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         return {
             reason: 'no_anchors',
             details: message,
+            pubkey,
         };
     }
 
@@ -62,6 +73,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         return {
             reason: 'failed_to_connect',
             details: message,
+            pubkey,
         };
     }
 
@@ -70,6 +82,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         return {
             reason: 'not_online',
             details: message,
+            pubkey,
         };
     }
 
@@ -78,6 +91,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         return {
             reason: 'no_address',
             details: message,
+            pubkey,
         };
     }
 
@@ -86,6 +100,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         return {
             reason: 'rejected',
             details: message,
+            pubkey,
         };
     }
 
@@ -94,6 +109,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
         return {
             reason: 'internal_error',
             details: message,
+            pubkey,
         };
     }
 
@@ -101,6 +117,7 @@ export function parseOpenError(error: unknown): { reason: RejectionReason; minSi
     return {
         reason: 'rejected',
         details: message,
+        pubkey,
     };
 }
 
@@ -173,22 +190,29 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         const parsed = parseOpenError(error);
         log(`Batch open failed: ${parsed.details}`);
 
-        // Record rejection for all channels (we can't identify which one failed)
+        // Record results and rejections
         for (const attempt of attempts) {
+            // Is this specific node the cause of the failure?
+            // If no specific pubkey mentioned, we conservatively treat all as failed but don't record rejections for all.
+            const isImplicated = !parsed.pubkey || parsed.pubkey === attempt.pubkey;
+
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,
-                error: parsed.details,
-                rejectionReason: parsed.reason,
-                detectedMinimum: parsed.minSize,
+                error: isImplicated ? parsed.details : 'Batch cancelled due to other peer failure',
+                rejectionReason: isImplicated ? parsed.reason : 'internal_error',
+                detectedMinimum: isImplicated ? parsed.minSize : undefined,
             });
 
-            addRejection(attempt.pubkey, {
-                date: new Date(),
-                reason: parsed.reason,
-                details: parsed.details,
-                minChannelSize: parsed.minSize,
-            });
+            // Only record rejection if this specific node was named in the error
+            if (isImplicated) {
+                addRejection(attempt.pubkey, {
+                    date: new Date(),
+                    reason: parsed.reason,
+                    details: parsed.details,
+                    minChannelSize: parsed.minSize,
+                });
+            }
         }
 
         saveHistory(plan, results);
