@@ -72,10 +72,12 @@ export async function getOwnPubkey(): Promise<string> {
 // Get on-chain balance
 export async function getChainBalance(): Promise<{ confirmed: number; unconfirmed: number }> {
     const { lnd } = await connectLnd();
-    const result = await lnService.getChainBalance({ lnd });
+    const confirmed = await lnService.getChainBalance({ lnd });
+    const pending = await lnService.getPendingChainBalance({ lnd });
+    
     return {
-        confirmed: result.chain_confirmed_balance,
-        unconfirmed: result.chain_unconfirmed_balance,
+        confirmed: confirmed.chain_balance ?? 0,
+        unconfirmed: pending.pending_chain_balance ?? 0,
     };
 }
 

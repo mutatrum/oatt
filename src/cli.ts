@@ -188,7 +188,10 @@ function formatCandidate(c: ChannelCandidate, showDetails: boolean): string {
     return line;
 }
 
-function formatSats(sats: number): string {
+function formatSats(sats: number | undefined | null): string {
+    if (sats === undefined || sats === null) {
+        return '0';
+    }
     if (sats >= 100_000_000) {
         return (sats / 100_000_000).toFixed(2) + ' BTC';
     }

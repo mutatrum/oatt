@@ -185,8 +185,13 @@ declare module 'ln-service' {
     export function getChainBalance(args: {
         lnd: unknown;
     }): Promise<{
-        chain_confirmed_balance: number;
-        chain_unconfirmed_balance: number;
+        chain_balance: number;
+    }>;
+
+    export function getPendingChainBalance(args: {
+        lnd: unknown;
+    }): Promise<{
+        pending_chain_balance: number;
     }>;
 
     export function getWalletStatus(args: {
