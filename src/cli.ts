@@ -321,8 +321,8 @@ program
                 budget = parseInt(options.budget);
             } else {
                 console.log(chalk.gray(`\nAvailable on-chain balance: ${formatSats(available)}`));
-                // Suggest 95% of balance to leave some for fees/reserves
-                const suggested = Math.floor(available * 0.95);
+                // Suggest 100% of balance, user can adjust if they want to leave some for fees
+                const suggested = available;
                 const { budgetInput } = await inquirer.default.prompt([{
                     type: 'number',
                     name: 'budgetInput',
