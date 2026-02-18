@@ -191,6 +191,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     const verificationResults = await Promise.all(attempts.map(async (attempt) => {
         // Already connected?
         if (connectedSet.has(attempt.pubkey)) {
+            log(`  • ${attempt.alias}: Already connected`);
             return { attempt, success: true };
         }
 
@@ -202,14 +203,20 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         }
 
         // Try all addresses for this peer
+        log(`  • ${attempt.alias}: Connecting to ${info.addresses.length} addresses...`);
         let lastError = 'Failed to connect';
-        for (const address of info.addresses) {
+        for (let i = 0; i < info.addresses.length; i++) {
+            const address = info.addresses[i];
             try {
                 // Use a 15 second timeout for each attempt
                 await connectPeer(attempt.pubkey, address, 15000);
+                log(`  ✓ ${attempt.alias}: Connected`);
                 return { attempt, success: true };
             } catch (err) {
                 lastError = parseOpenError(err).details;
+                if (info.addresses.length > 1) {
+                    log(`    - Address ${i + 1}/${info.addresses.length} (${address}) failed: ${lastError}`);
+                }
             }
         }
 
