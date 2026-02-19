@@ -203,6 +203,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     let attempts: ChannelOpenAttempt[] = [];
     let backfilled = false;
     let iteration = 0;
+    let pendingStarted = false;
     const MAX_ITERATIONS = 5;
 
     while (iteration < MAX_ITERATIONS) {
@@ -254,7 +255,6 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             const batch = attempts.slice(i, i + BATCH_SIZE);
             const batchResults = await Promise.all(batch.map(async (attempt) => {
                 if (connectedSet.has(attempt.pubkey)) {
-                    log(`  • ${attempt.alias}: Already connected`);
                     return { attempt, success: true };
                 }
 
@@ -330,6 +330,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 attempts[i].address = result.pending[i].address;
             }
             // If we successfully initiated everything, we can exit the convergence loop
+            pendingStarted = true;
             break;
         } catch (error) {
             const parsed = parseOpenError(error);
@@ -360,6 +361,11 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 throw error;
             }
         }
+    }
+    
+    if (!pendingStarted) {
+        log(chalk.red('\n✗ Failed to initiate channel batch after multiple attempts.'));
+        return results;
     }
 
     if (attempts.length === 0) {

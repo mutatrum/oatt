@@ -537,14 +537,21 @@ program
                         const { executePlan, formatResults } = await import('./opener.js');
                         console.log(chalk.yellow('\nOpening channels...'));
                         const candidates = loadCandidates();
-                        const results = await executePlan(plan, {
-                            feeRate,
-                            onProgress: (msg: string) => console.log(msg),
-                            availableCandidates: candidates,
-                            openPeerPubkeys,
-                            defaultSize,
-                            maxSize
-                        });
+                        let results: any[] = [];
+                        try {
+                            results = await executePlan(plan, {
+                                feeRate,
+                                onProgress: (msg: string) => console.log(msg),
+                                availableCandidates: candidates,
+                                openPeerPubkeys,
+                                defaultSize,
+                                maxSize
+                            });
+                        } catch (err: any) {
+                            console.log(chalk.red('\n✗ Batch execution failed:'));
+                            console.log(chalk.red(`  ${err.message || err.details || JSON.stringify(err)}`));
+                            continue; // In interactive mode, we want to continue to the menu
+                        }
                         console.log(formatResults(results));
 
                         const failures = results.filter(r => !r.success);
@@ -717,16 +724,22 @@ program
 
             console.log(chalk.yellow('\nOpening channels...'));
             const candidates = loadCandidates();
-            const results = await executePlan(plan, {
-                feeRate,
-                onProgress: (msg: string) => console.log(msg),
-                availableCandidates: candidates,
-                openPeerPubkeys,
-                defaultSize: parseInt(options.defaultSize),
-                maxSize: parseInt(options.maxSize),
-            });
-            console.log(formatResults(results));
-            process.exit(0);
+            try {
+                const results = await executePlan(plan, {
+                    feeRate,
+                    onProgress: (msg: string) => console.log(msg),
+                    availableCandidates: candidates,
+                    openPeerPubkeys,
+                    defaultSize: parseInt(options.defaultSize),
+                    maxSize: parseInt(options.maxSize),
+                });
+                console.log(formatResults(results));
+                process.exit(0);
+            } catch (err: any) {
+                console.log(chalk.red('\n✗ Batch execution failed:'));
+                console.log(chalk.red(`  ${err.message || err.details || JSON.stringify(err)}`));
+                process.exit(1);
+            }
         } else {
             process.exit(0);
         }
