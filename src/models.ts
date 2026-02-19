@@ -42,7 +42,7 @@ export const ANCHOR_RESERVE = 2500;
 export type CloseType = 'local_force' | 'remote_force' | 'coop';
 
 // Source of channel candidate
-export type CandidateSource = 'force_closed' | 'graph_distance' | 'manual';
+export type CandidateSource = 'force_closed' | 'graph_distance' | 'forwarding_history' | 'manual';
 
 // Channel history with a peer
 export interface ChannelHistory {

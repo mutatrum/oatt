@@ -60,6 +60,28 @@ collectCmd
     });
 
 collectCmd
+    .command('forwards')
+    .description('Find high-value routing peers from forwarding history')
+    .option('-d, --days <n>', 'Days of history to analyse', '30')
+    .option('-n, --top-n <n>', 'Number of top candidates to output', '20')
+    .option('-s, --min-score <sats>', 'Minimum fee sats to qualify', '0')
+    .action(async (options) => {
+        try {
+            await connectLnd();
+            const { runForwardingHistoryCollection } = await import('./collectors/forwards.js');
+            const count = await runForwardingHistoryCollection({
+                days: parseInt(options.days),
+                topN: parseInt(options.topN),
+                minScore: parseInt(options.minScore),
+            });
+            console.log(chalk.green(`✓ Added ${count} candidates from forwarding history`));
+        } catch (error) {
+            console.error(chalk.red('Error:'), error);
+            process.exit(1);
+        }
+    });
+
+collectCmd
     .command('add <pubkey>')
     .description('Manually add a candidate')
     .action(async (pubkey: string) => {
