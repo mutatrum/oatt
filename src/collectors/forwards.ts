@@ -132,7 +132,7 @@ export async function collectForwardingCandidates(
         score.bidirectional = score.inboundCount > 0 && score.outboundCount > 0;
     }
 
-    // Sort: bidirectional first, then by total fees
+    // Sort: bidirectional first, then by total fees — keep ALL for graph lookup, topN trimmed after
     const ranked = Array.from(scores.values())
         .filter(s => s.totalFeesSats >= minScore)
         .filter(s => !openPeerPubkeys.has(s.pubkey))  // Skip existing partners
@@ -142,10 +142,9 @@ export async function collectForwardingCandidates(
                 return a.bidirectional ? -1 : 1;
             }
             return b.totalFeesSats - a.totalFeesSats;
-        })
-        .slice(0, topN);
+        });
 
-    console.log(`  ${ranked.length} unique peers scored (${scores.size - ranked.length} filtered)`);
+    console.log(`  ${ranked.length} unique peers to check (${scores.size - ranked.length} filtered)`);
 
     // Resolve node info and build candidates
     const existingCandidates = loadCandidates();
@@ -185,6 +184,8 @@ export async function collectForwardingCandidates(
             `${String(score.totalFeesSats).padStart(8)} sats fees  ` +
             `${String(Math.round(score.totalVolumeSats / 1000)).padStart(10)} k sats vol`
         );
+
+        if (candidates.length >= topN) break;  // Stop once we have enough reachable candidates
     }
 
     return candidates;
