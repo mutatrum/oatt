@@ -160,19 +160,14 @@ program
         // Display
         console.log(chalk.bold(`\n${filtered.length} candidates:\n`));
         console.log(chalk.gray(
-            'Alias                 Pubkey       Sources      Ch  Cap  Dist  Min Size  Status         Age'
+            'Alias                     Pubkey          Sources         Ch  Cap     Dist  Min Size  Status         Age'
         ));
 
         for (const candidate of filtered) {
             const c = candidate;
-            const pubkey = c.pubkey.slice(0, 10) + '...';
-            const channels = c.channels.toString().padStart(2);
-            const capacity = formatSats(c.capacitySats).padStart(5);
-            const distance = (c.distance?.toString() ?? '-').padStart(4);
-            const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(8) : '        -';
-            const alias = c.alias.slice(0, 20).padEnd(20);
-            const age = Math.floor((Date.now() - c.addedAt.getTime()) / (1000 * 60 * 60 * 24));
-
+            const alias = c.alias.slice(0, 25).padEnd(25);
+            const pubkey = (c.pubkey.slice(0, 12) + '...').padEnd(15);
+            
             const sourceLabels = c.sources.map(s => {
                 switch (s) {
                     case 'force_closed': return 'Closed';
@@ -182,19 +177,24 @@ program
                     default: return s;
                 }
             }).join('|');
-            const sources = sourceLabels.padEnd(10);
+            const sources = sourceLabels.slice(0, 15).padEnd(15);
+
+            const channels = c.channels.toString().padStart(2);
+            const capacity = formatSats(c.capacitySats).padStart(7);
+            const distance = (c.distance?.toString() ?? '-').padStart(4);
+            const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(8) : '       -';
+            const age = Math.floor((Date.now() - c.addedAt.getTime()) / (1000 * 60 * 60 * 24));
 
             // Determine status
             let status = 'Eligible';
             let statusColor = chalk.green;
-
+            
             if (c.rejections.length > 0) {
                 const blocking = c.rejections.find(r => !REJECTION_CONFIG[r.reason].retryable);
                 if (blocking) {
                     status = 'Blocked';
                     statusColor = chalk.red;
                 } else {
-                    // Check for most recent cooldown
                     let maxWaitDays = 0;
                     for (const r of c.rejections) {
                         const config = REJECTION_CONFIG[r.reason];
@@ -203,8 +203,7 @@ program
                             const elapsedMs = Date.now() - new Date(r.date).getTime();
                             const remainingMs = cooldownMs - elapsedMs;
                             if (remainingMs > 0) {
-                                const remainingDays = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
-                                maxWaitDays = Math.max(maxWaitDays, remainingDays);
+                                maxWaitDays = Math.max(maxWaitDays, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
                             }
                         }
                     }
