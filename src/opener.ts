@@ -108,6 +108,11 @@ export function parseOpenError(error: unknown): {
             reason: 'no_anchors' as RejectionReason,
             regex: /anchor|feature/i
         },
+        // Zombie / Pending limits
+        {
+            reason: 'too_many_pending' as RejectionReason,
+            regex: /pending channels exceed maximum/i
+        },
         // Remote internal errors
         {
             reason: 'internal_error' as RejectionReason,

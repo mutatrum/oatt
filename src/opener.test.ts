@@ -81,4 +81,12 @@ describe('parseOpenError', () => {
         expect(result.reason).not.toBe('internal_error');
         expect(result.reason).toBe('rejected'); // Default fallback
     });
+
+    it('should handle "Number of pending channels exceed maximum" as too_many_pending', () => {
+        const error = '503 UnexpectedErrorOpeningChannels {"err":{"code":2,"details":"remote canceled funding, possibly timed out: received funding error from 024ebb99af1a70ec402ee94c09f4d3f60c2fbef5e8fe51e521427c3d112385db55: chan_id=3dabb6ccc1fae42e652502d058b2f456888cea33993739cd96fb39363ade56b6, err=Number of pending channels exceed maximum","metadata":{"content-type":["application/grpc"]}}}';
+        const result = parseOpenError(error);
+        
+        expect(result.reason).toBe('too_many_pending');
+        expect(result.pubkey).toBe('024ebb99af1a70ec402ee94c09f4d3f60c2fbef5e8fe51e521427c3d112385db55');
+    });
 });

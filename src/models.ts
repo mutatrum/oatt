@@ -15,6 +15,7 @@ export type RejectionReason =
     | 'coop_close'
     | 'batch_failed'
     | 'already_open'
+    | 'too_many_pending'
     | 'internal_error';
 
 // Retry configuration for each rejection type
@@ -30,6 +31,7 @@ export const REJECTION_CONFIG: Record<RejectionReason, { retryable: boolean; coo
     coop_close: { retryable: false },
     batch_failed: { retryable: true, cooldownDays: 0 },
     already_open: { retryable: false },
+    too_many_pending: { retryable: true, cooldownDays: 1 },
     internal_error: { retryable: true, cooldownDays: 1 },
 };
 
