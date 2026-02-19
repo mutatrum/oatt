@@ -28,14 +28,14 @@ interface GraphEdge {
 /**
  * Build adjacency list from network graph
  */
-function buildAdjacencyList(
-    nodes: Map<string, GraphNode>,
+export function buildAdjacencyList(
+    nodes: Iterable<string>,
     edges: GraphEdge[]
 ): Map<string, Set<string>> {
     const adjacency = new Map<string, Set<string>>();
 
     // Initialize all nodes
-    for (const pubkey of nodes.keys()) {
+    for (const pubkey of nodes) {
         adjacency.set(pubkey, new Set());
     }
 
@@ -51,7 +51,7 @@ function buildAdjacencyList(
 /**
  * BFS to find distances from source node
  */
-function computeDistances(
+export function computeDistances(
     adjacency: Map<string, Set<string>>,
     sourcePubkey: string
 ): Map<string, number> {
@@ -134,7 +134,7 @@ export async function collectGraphDistanceCandidates(options?: {
 
     // Build adjacency and compute distances
     console.log('Computing distances...');
-    const adjacency = buildAdjacencyList(nodes, edges);
+    const adjacency = buildAdjacencyList(nodes.keys(), edges);
     const distances = computeDistances(adjacency, ownPubkey);
 
     // Filter candidates
@@ -219,4 +219,47 @@ export async function runGraphDistanceCollection(options?: {
     }
 
     return candidates.length;
+}
+
+/**
+ * Hydrate distances for ALL existing candidates from any source
+ */
+export async function runDistanceSync(): Promise<number> {
+    const { connectLnd, getNetworkGraph, getOwnPubkey } = await import('../lnd.js');
+    const { loadCandidates, saveCandidates } = await import('../storage.js');
+
+    console.log('Syncing graph distances for all candidates...');
+    await connectLnd();
+    const graph = await getNetworkGraph();
+    const ownPubkey = await getOwnPubkey();
+
+    // Extract edges and build adjacency
+    const edges: GraphEdge[] = graph.channels.map(ch => ({
+        node1: ch.policies[0]?.public_key ?? '',
+        node2: ch.policies[1]?.public_key ?? '',
+        capacity: ch.capacity,
+    })).filter(e => e.node1 && e.node2);
+
+    const nodePubkeys = new Set(graph.nodes.map(n => n.public_key));
+    const adjacency = buildAdjacencyList(nodePubkeys, edges);
+    const distances = computeDistances(adjacency, ownPubkey);
+
+    // Hydrate candidates
+    const candidates = loadCandidates();
+    let updatedCount = 0;
+
+    for (const candidate of candidates) {
+        const d = distances.get(candidate.pubkey);
+        if (d !== undefined && d !== candidate.distance) {
+            candidate.distance = d;
+            updatedCount++;
+        }
+    }
+
+    if (updatedCount > 0) {
+        saveCandidates(candidates);
+    }
+
+    console.log(`✓ Updated distances for ${updatedCount} candidates`);
+    return updatedCount;
 }

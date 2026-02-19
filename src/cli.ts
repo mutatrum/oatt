@@ -31,12 +31,16 @@ const collectCmd = program
 
 collectCmd
     .command('force-closed')
-    .description('Find force-closed channels to potentially reopen')
+    .description('Collect candidates from force-closed channels')
     .action(async () => {
         try {
             await connectLnd();
+            const { runForceClosedCollection } = await import('./collectors/force-closed.js');
             const count = await runForceClosedCollection();
-            console.log(chalk.green(`✓ Added ${count} candidates from force-closed channels`));
+            console.log(chalk.green(`✓ Collected ${count} force-closed candidates`));
+
+            const { runDistanceSync } = await import('./collectors/graph-distance.js');
+            await runDistanceSync();
         } catch (error) {
             console.error(chalk.red('Error:'), error);
             process.exit(1);
@@ -52,12 +56,16 @@ collectCmd
     .action(async (options) => {
         try {
             await connectLnd();
+            const { runGraphDistanceCollection } = await import('./collectors/graph-distance.js');
             const count = await runGraphDistanceCollection({
                 minDistance: parseInt(options.minDistance),
                 minChannels: parseInt(options.minChannels),
                 minCapacity: parseInt(options.minCapacity),
             });
-            console.log(chalk.green(`✓ Added ${count} candidates from graph distance`));
+            console.log(chalk.green(`✓ Collected ${count} graph distance candidates`));
+
+            const { runDistanceSync } = await import('./collectors/graph-distance.js');
+            await runDistanceSync();
         } catch (error) {
             console.error(chalk.red('Error:'), error);
             process.exit(1);
@@ -80,6 +88,9 @@ collectCmd
                 minScore: parseInt(options.minScore),
             });
             console.log(chalk.green(`✓ Added ${count} candidates from forwarding history`));
+
+            const { runDistanceSync } = await import('./collectors/graph-distance.js');
+            await runDistanceSync();
         } catch (error) {
             console.error(chalk.red('Error:'), error);
             process.exit(1);
@@ -113,6 +124,24 @@ collectCmd
             });
 
             console.log(chalk.green(`✓ Added ${nodeInfo.alias} (${pubkey.slice(0, 12)}...)`));
+
+            const { runDistanceSync } = await import('./collectors/graph-distance.js');
+            await runDistanceSync();
+        } catch (error) {
+            console.error(chalk.red('Error:'), error);
+            process.exit(1);
+        }
+    });
+
+collectCmd
+    .command('sync')
+    .description('Sync graph distances for all candidates')
+    .action(async () => {
+        try {
+            await connectLnd();
+            const { runDistanceSync } = await import('./collectors/graph-distance.js');
+            await runDistanceSync();
+            console.log(chalk.green('✓ Graph distances synced for all candidates.'));
         } catch (error) {
             console.error(chalk.red('Error:'), error);
             process.exit(1);

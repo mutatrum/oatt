@@ -109,6 +109,9 @@ oatt collect forwards --days 30 --top-n 20
 
 # Manually add a node
 oatt collect add <pubkey>
+
+# Sync graph distances for all candidates
+oatt collect sync
 ```
 
 ### List Candidates
