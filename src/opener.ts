@@ -253,23 +253,35 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
             const batch = attempts.slice(i, i + BATCH_SIZE);
             const batchResults = await Promise.all(batch.map(async (attempt) => {
-                if (connectedSet.has(attempt.pubkey)) return { attempt, success: true };
+                if (connectedSet.has(attempt.pubkey)) {
+                    log(`  • ${attempt.alias}: Already connected`);
+                    return { attempt, success: true };
+                }
 
                 const info = infoMap.get(attempt.pubkey);
                 if (!info || info.addresses.length === 0) {
                     const reason: RejectionReason = info ? 'no_address' : 'not_online';
-                    return { attempt, success: false, reason, errorMsg: info ? 'No addresses' : 'Offline' };
+                    const errorMsg = info ? 'Node has no addresses' : 'Node not found in graph';
+                    return { attempt, success: false, reason, errorMsg };
                 }
 
                 const uniqueAddresses = Array.from(new Set(info.addresses));
+                log(`  • ${attempt.alias}: Connecting to ${uniqueAddresses.length} addresses...`);
+                
+                let lastError = 'Failed to connect';
                 for (const address of uniqueAddresses) {
                     try {
                         await connectPeer(attempt.pubkey, address, 15000);
+                        log(`  ✓ ${attempt.alias}: Connected`);
                         return { attempt, success: true };
-                    } catch (err) { }
+                    } catch (err) {
+                        const parsed = parseOpenError(err);
+                        lastError = parsed.details;
+                        log(`    - ${attempt.alias} | ${address} failed: ${lastError}`);
+                    }
                 }
 
-                return { attempt, success: false, reason: 'failed_to_connect' as RejectionReason, errorMsg: 'Connection failed' };
+                return { attempt, success: false, reason: 'failed_to_connect' as RejectionReason, errorMsg: lastError };
             }));
 
             for (const res of batchResults) {
