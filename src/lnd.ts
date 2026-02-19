@@ -110,8 +110,7 @@ export async function getForwardingHistory(after?: Date, before?: Date): Promise
             lnd,
             after: after?.toISOString(),
             before: effectiveBefore?.toISOString(),
-            limit,
-            token,
+            ...(token ? { token } : { limit }),
         });
         allForwards.push(...result.forwards);
         token = result.next;
