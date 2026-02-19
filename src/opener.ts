@@ -304,7 +304,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 defaultSize,
                 maxSize,
                 openPeerPubkeys,
-                candidates: overrideCandidates ?? loadCandidates()
+                candidates: loadCandidates() // Always load from disk to pick up recent rejections
             });
             backfilled = true;
             continue; // Re-attempt connection phase with new plan
@@ -349,7 +349,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                     defaultSize,
                     maxSize,
                     openPeerPubkeys,
-                    candidates: overrideCandidates ?? loadCandidates()
+                    candidates: loadCandidates()
                 });
                 backfilled = true;
                 continue;
