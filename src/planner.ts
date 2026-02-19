@@ -75,17 +75,33 @@ export function createPlan(options: PlanOptions): OpenPlan {
     // Filter out candidates with minimum > maxSize
     candidates = candidates.filter(c => getEffectiveMinimum(c, defaultSize) <= maxSize);
 
-    // Prioritize manual candidates first, then by effective minimum (lowest first to maximize channel count)
-  candidates.sort((a, b) => {
-    // Manual source always comes before others
-    if (a.sources.includes('manual') && !b.sources.includes('manual')) return -1;
-    if (!a.sources.includes('manual') && b.sources.includes('manual')) return 1;
+    // Prioritize by signal quality
+    candidates.sort((a, b) => {
+        // 1. Manual source always comes before others
+        const aManual = a.sources.includes('manual');
+        const bManual = b.sources.includes('manual');
+        if (aManual && !bManual) return -1;
+        if (!aManual && bManual) return 1;
 
-    // Then sort by minimum size
-    const minA = getEffectiveMinimum(a, defaultSize);
-    const minB = getEffectiveMinimum(b, defaultSize);
-    return minA - minB;
-  });
+        // 2. Profitable History (Total fees earned)
+        const aFees = a.history.reduce((sum, h) => sum + (h.feesEarned ?? 0), 0);
+        const bFees = b.history.reduce((sum, h) => sum + (h.feesEarned ?? 0), 0);
+        if (aFees > bFees) return -1;
+        if (aFees < bFees) return 1;
+
+        // 3. Multi-Signal (Source count)
+        if (a.sources.length > b.sources.length) return -1;
+        if (a.sources.length < b.sources.length) return 1;
+
+        // 4. Potential (Capacity * Channels)
+        const aScore = a.capacitySats * a.channels;
+        const bScore = b.capacitySats * b.channels;
+        if (aScore > bScore) return -1;
+        if (aScore < bScore) return 1;
+
+        // 5. Recency
+        return b.addedAt.getTime() - a.addedAt.getTime();
+    });
 
     // Allocate budget
     const plannedChannels: PlannedChannel[] = [];
