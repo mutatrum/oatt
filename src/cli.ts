@@ -4,12 +4,16 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, saveConfig, getConfigPath } from './config.js';
-import { loadCandidates, addRejection, removeCandidate } from './storage.js';
+import path from 'node:path';
+import fs from 'node:fs';
+import stringWidth from 'string-width';
+import { loadConfig, saveConfig, getConfigPath, getConfigDir } from './config.js';
+import { loadCandidates, addRejection, removeCandidate, removeCandidatesBySource, upsertCandidate, saveCandidates } from './storage.js';
 import { runForceClosedCollection } from './collectors/force-closed.js';
 import { runGraphDistanceCollection } from './collectors/graph-distance.js';
-import { connectLnd, getNodeInfo, getOwnPubkey } from './lnd.js';
-import { REJECTION_CONFIG, type RejectionReason, type ChannelCandidate } from './models.js';
+import { connectLnd, getNodeInfo, getOwnPubkey, getForwardingHistory, getChainBalance } from './lnd.js';
+import { REJECTION_CONFIG, type RejectionReason, type ChannelCandidate, type OpenPlan } from './models.js';
+import { createPlan, addToPlan, removeFromPlan, resizeInPlan, isEligible, sortCandidatesBySignal } from './planner.js';
 
 const program = new Command();
 
@@ -123,102 +127,154 @@ program
     .option('-d, --by-distance', 'Sort by graph distance')
     .option('-a, --all', 'Show all details including rejections')
     .action(async (options) => {
-        const { isEligible } = await import('./planner.js');
-        const { getChannels } = await import('./lnd.js');
+        await listCandidates(options);
+    });
 
-        const candidates = loadCandidates();
+// Visual width helpers for alignment with double-wide characters
+function visualTruncate(str: string, width: number): string {
+    let currentWidth = 0;
+    let result = '';
+    for (const char of str) {
+        const charWidth = stringWidth(char);
+        if (currentWidth + charWidth > width) break;
+        result += char;
+        currentWidth += charWidth;
+    }
+    return result;
+}
 
-        if (candidates.length === 0) {
-            console.log(chalk.yellow('No candidates. Run `oatt collect` first.'));
-            return;
+function visualPadEnd(str: string, width: number): string {
+    const sw = stringWidth(str);
+    if (sw >= width) return str;
+    return str + ' '.repeat(width - sw);
+}
+
+function formatCandidateHeader(isPlan: boolean): string {
+    const parts = [
+        visualPadEnd('#', 4),
+        visualPadEnd('Alias', 25),
+        visualPadEnd('Pubkey', 15),
+    ];
+
+    if (isPlan) {
+        parts.push(visualPadEnd('Amount', 10));
+    }
+
+    parts.push(
+        visualPadEnd('Sources', 15),
+        'Ch ',
+        'Cap    ',
+        'Dist ',
+        'Min Size ',
+        visualPadEnd('Status', 13),
+        'Age'
+    );
+
+    return chalk.gray(parts.join(' '));
+}
+
+function formatCandidateRow(c: ChannelCandidate, index: number, planAmount?: number): string {
+    const num = (index + 1).toString().slice(0, 3).padEnd(4);
+    const alias = visualPadEnd(visualTruncate(c.alias, 25), 25);
+    const pubkey = visualPadEnd(c.pubkey.slice(0, 12) + '...', 15);
+    
+    const parts = [num, alias, pubkey];
+
+    if (planAmount !== undefined) {
+        parts.push(visualPadEnd(formatSats(planAmount), 10));
+    }
+
+    const sourceLabels = c.sources.map(s => {
+        switch (s) {
+            case 'force_closed': return 'Closed';
+            case 'graph_distance': return 'Graph';
+            case 'forwarding_history': return 'Forwards';
+            case 'manual': return 'Manual';
+            default: return s;
         }
+    }).join('|');
+    const sources = visualPadEnd(visualTruncate(sourceLabels, 15), 15);
 
-        let openPeerPubkeys: Set<string> | undefined;
+    const channels = c.channels.toString().padStart(2);
+    const capacity = formatSats(c.capacitySats).padStart(7);
+    const distance = (c.distance?.toString() ?? '-').padStart(4);
+    const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(8) : '       -';
+    const age = Math.floor((Date.now() - c.addedAt.getTime()) / (1000 * 60 * 60 * 24)) + 'd';
+
+    // Determine status
+    let status = 'Eligible';
+    let statusColor = chalk.green;
+    
+    if (c.rejections.length > 0) {
+        const blocking = c.rejections.find(r => !REJECTION_CONFIG[r.reason].retryable);
+        if (blocking) {
+            status = 'Blocked';
+            statusColor = chalk.red;
+        } else {
+            let maxWaitDays = 0;
+            for (const r of c.rejections) {
+                const config = REJECTION_CONFIG[r.reason];
+                if (config.cooldownDays) {
+                    const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
+                    const elapsedMs = Date.now() - new Date(r.date).getTime();
+                    const remainingMs = cooldownMs - elapsedMs;
+                    if (remainingMs > 0) {
+                        maxWaitDays = Math.max(maxWaitDays, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
+                    }
+                }
+            }
+            if (maxWaitDays > 0) {
+                status = `Wait ${maxWaitDays}d`;
+                statusColor = chalk.yellow;
+            }
+        }
+    }
+
+    const statusStr = statusColor(status.padEnd(13));
+    
+    parts.push(sources, channels, capacity, distance, minSize, statusStr, age.padStart(4));
+    return parts.join(' ');
+}
+
+async function listCandidates(options: { eligible?: boolean; all?: boolean; byDistance?: boolean }) {
+    try {
+        let candidates = loadCandidates();
+
+        const openPeerPubkeys = new Set<string>();
         try {
             await connectLnd();
-            const channels = await getChannels();
-            openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
+            const channels = await import('./lnd.js').then(m => m.getChannels());
+            channels.forEach(c => openPeerPubkeys.add(c.partner_public_key));
         } catch (e) {
-            console.warn(chalk.yellow('Warning: Could not fetch open channels from LND. List may include existing partners.'));
+            console.error(chalk.yellow('  Warning: Could not fetch open channels from LND. Results might include existing partners.'));
         }
 
+        // Filter
         let filtered = candidates;
-
-        // Filter eligible only
         if (options.eligible) {
             filtered = candidates.filter(c => isEligible(c, openPeerPubkeys));
+        } else {
+            // Even if not strictly 'eligible', we filter out existing partners for list to keep it clean
+            filtered = candidates.filter(c => !openPeerPubkeys.has(c.pubkey));
         }
 
         // Sort
         if (options.byDistance) {
             filtered.sort((a, b) => (b.distance ?? 0) - (a.distance ?? 0));
         } else {
-            // Default: sort by channels
-            filtered.sort((a, b) => b.channels - a.channels);
+            // Default: use the same signal-based sorting as plan
+            filtered = sortCandidatesBySignal(filtered);
         }
 
         // Display
         console.log(chalk.bold(`\n${filtered.length} candidates:\n`));
-        console.log(chalk.gray(
-            'Alias                     Pubkey          Sources         Ch  Cap     Dist  Min Size  Status         Age'
-        ));
+        console.log(formatCandidateHeader(false));
 
-        for (const candidate of filtered) {
-            const c = candidate;
-            const alias = c.alias.slice(0, 25).padEnd(25);
-            const pubkey = (c.pubkey.slice(0, 12) + '...').padEnd(15);
-            
-            const sourceLabels = c.sources.map(s => {
-                switch (s) {
-                    case 'force_closed': return 'Closed';
-                    case 'graph_distance': return 'Graph';
-                    case 'forwarding_history': return 'Forwards';
-                    case 'manual': return 'Manual';
-                    default: return s;
-                }
-            }).join('|');
-            const sources = sourceLabels.slice(0, 15).padEnd(15);
+        filtered.forEach((candidate, i) => {
+            console.log(formatCandidateRow(candidate, i));
 
-            const channels = c.channels.toString().padStart(2);
-            const capacity = formatSats(c.capacitySats).padStart(7);
-            const distance = (c.distance?.toString() ?? '-').padStart(4);
-            const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(8) : '       -';
-            const age = Math.floor((Date.now() - c.addedAt.getTime()) / (1000 * 60 * 60 * 24));
-
-            // Determine status
-            let status = 'Eligible';
-            let statusColor = chalk.green;
-            
-            if (c.rejections.length > 0) {
-                const blocking = c.rejections.find(r => !REJECTION_CONFIG[r.reason].retryable);
-                if (blocking) {
-                    status = 'Blocked';
-                    statusColor = chalk.red;
-                } else {
-                    let maxWaitDays = 0;
-                    for (const r of c.rejections) {
-                        const config = REJECTION_CONFIG[r.reason];
-                        if (config.cooldownDays) {
-                            const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
-                            const elapsedMs = Date.now() - new Date(r.date).getTime();
-                            const remainingMs = cooldownMs - elapsedMs;
-                            if (remainingMs > 0) {
-                                maxWaitDays = Math.max(maxWaitDays, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
-                            }
-                        }
-                    }
-                    if (maxWaitDays > 0) {
-                        status = `Wait ${maxWaitDays}d`;
-                        statusColor = chalk.yellow;
-                    }
-                }
-            }
-
-            const statusStr = statusColor(status.padEnd(13));
-            let line = `${alias} ${pubkey} ${sources} ${channels} ${capacity} ${distance} ${minSize} ${statusStr} ${age}d`;
-
-            if (options.all && c.rejections.length > 0) {
-                const rejectionLines = c.rejections.map(r => {
+            if (options.all && candidate.rejections.length > 0) {
+                const rejectionLines = candidate.rejections.map(r => {
                     const config = REJECTION_CONFIG[r.reason];
                     let cooldownInfo = '';
 
@@ -237,28 +293,48 @@ program
 
                     return `    ${chalk.gray(new Date(r.date).toLocaleDateString())} ${chalk.yellow(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}${cooldownInfo}`;
                 });
-                line += '\n' + rejectionLines.join('\n');
+                console.log(rejectionLines.join('\n'));
             }
-            console.log(line);
-        }
+        });
 
         console.log('');
-    });
+    } catch (e) {
+        console.error(chalk.red('  Error listing candidates:'), e);
+    }
+}
+
 
 function formatSats(sats: number | undefined | null): string {
-    if (sats === undefined || sats === null) {
-        return '0';
-    }
-    if (sats >= 100_000_000) {
-        return (sats / 100_000_000).toFixed(2) + ' BTC';
-    }
-    if (sats >= 1_000_000) {
-        return (sats / 1_000_000).toFixed(1) + 'M';
-    }
-    if (sats >= 1_000) {
-        return (sats / 1_000).toFixed(0) + 'k';
-    }
+    if (sats === undefined || sats === null) return '0';
+    if (sats >= 100_000_000) return (sats / 100_000_000).toFixed(2) + ' BTC';
+    if (sats >= 1_000_000) return (sats / 1_000_000).toFixed(1) + 'M';
+    if (sats >= 1_000) return (sats / 1_000).toFixed(0) + 'k';
     return sats.toString();
+}
+
+function renderPlanTable(plan: OpenPlan) {
+    const candidates = loadCandidates();
+    
+    console.log('');
+    console.log(`Budget: ${formatSats(plan.budget)} | Default: ${formatSats(plan.defaultSize)} | Max: ${formatSats(plan.maxSize)}`);
+    console.log(`Note: Each channel includes an additional ${formatSats(2500 /* ANCHOR_RESERVE */)} anchor reserve.`);
+    console.log('─'.repeat(120));
+    console.log(formatCandidateHeader(true));
+    console.log('─'.repeat(120));
+
+    plan.channels.forEach((ch, i) => {
+        const candidate = candidates.find(c => c.pubkey === ch.pubkey);
+        if (candidate) {
+            console.log(formatCandidateRow(candidate, i, ch.amount));
+        } else {
+            // Fallback for manual adds not yet in storage (though they should be)
+            console.log(`${(i + 1).toString().padEnd(4)} ${visualPadEnd(ch.alias, 25)} ${visualPadEnd(ch.pubkey.slice(0, 12) + '...', 15)} ${visualPadEnd(formatSats(ch.amount), 10)} (Node info missing)`);
+        }
+    });
+
+    console.log('─'.repeat(120));
+    console.log(`Total: ${plan.channels.length} channels, ${formatSats(plan.totalAmount)} | Remaining: ${formatSats(plan.remainingBudget)}`);
+    console.log('');
 }
 
 // ============ reject ============
@@ -365,7 +441,7 @@ program
     .option('-s, --default-size <sats>', 'Default channel size', '1000000')
     .option('-m, --max-size <sats>', 'Maximum channel size', '10000000')
     .action(async (options) => {
-        const { createPlan, formatPlan, addToPlan, removeFromPlan, resizeInPlan, formatSats } = await import('./planner.js');
+        const { createPlan, addToPlan, removeFromPlan, resizeInPlan, formatSats } = await import('./planner.js');
         const inquirer = await import('inquirer');
         const { getChainBalance, connectLnd } = await import('./lnd.js');
 
@@ -417,7 +493,7 @@ program
         });
 
         console.log(chalk.bold('\nBatch Channel Open Plan'));
-        console.log(formatPlan(plan));
+        renderPlanTable(plan);
 
         if (plan.channels.length === 0) {
             console.log(chalk.yellow('No eligible candidates found. Run `oatt collect` first.'));
@@ -476,7 +552,7 @@ program
                             }]);
                             if (retry) {
                                 plan = createPlan({ budget, defaultSize, maxSize, openPeerPubkeys });
-                                console.log(formatPlan(plan));
+                                renderPlanTable(plan);
                                 continue;
                             }
                         }
@@ -493,7 +569,7 @@ program
                     if (pubkey) {
                         try {
                             plan = addToPlan(plan, pubkey.trim());
-                            console.log(formatPlan(plan));
+                            renderPlanTable(plan);
                         } catch (e) {
                             console.log(chalk.red((e as Error).message));
                         }
@@ -524,7 +600,7 @@ program
 
                             try {
                                 plan = removeFromPlan(plan, index - 1);  // Convert to 0-indexed
-                                console.log(formatPlan(plan));
+                                renderPlanTable(plan);
                             } catch (e) {
                                 console.log(chalk.red((e as Error).message));
                             }
@@ -542,7 +618,7 @@ program
                     if (index !== undefined && amount) {
                         try {
                             plan = resizeInPlan(plan, index - 1, amount);
-                            console.log(formatPlan(plan));
+                            renderPlanTable(plan);
                         } catch (e) {
                             console.log(chalk.red((e as Error).message));
                         }
@@ -551,7 +627,7 @@ program
                 }
                 case 'refresh': {
                     plan = createPlan({ budget, defaultSize, maxSize, openPeerPubkeys });
-                    console.log(formatPlan(plan));
+                    renderPlanTable(plan);
                     break;
                 }
                 case 'bos': {
@@ -577,7 +653,7 @@ program
     .option('-s, --default-size <sats>', 'Default channel size', '1000000')
     .option('-m, --max-size <sats>', 'Maximum channel size', '10000000')
     .action(async (options) => {
-        const { createPlan, formatPlan, formatSats } = await import('./planner.js');
+        const { createPlan, formatSats } = await import('./planner.js');
         const { executePlan, formatResults, generateBosCommand } = await import('./opener.js');
         const inquirer = await import('inquirer');
 
@@ -603,7 +679,7 @@ program
         });
 
         console.log(chalk.bold('\nBatch Channel Open Plan'));
-        console.log(formatPlan(plan));
+        renderPlanTable(plan);
 
         if (plan.channels.length === 0) {
             console.log(chalk.yellow('No eligible candidates.'));

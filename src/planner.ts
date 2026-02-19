@@ -61,22 +61,10 @@ function getEffectiveMinimum(candidate: ChannelCandidate, defaultSize: number): 
 }
 
 /**
- * Create a batch open plan
+ * Sort candidates by "signal" (quality/reliability)
  */
-export function createPlan(options: PlanOptions): OpenPlan {
-    const { budget, defaultSize, maxSize } = options;
-
-    // Get candidates - either from options or storage
-    let candidates = options.candidates ?? loadCandidates();
-
-    // Filter to eligible candidates only
-    candidates = candidates.filter(c => isEligible(c, options.openPeerPubkeys));
-
-    // Filter out candidates with minimum > maxSize
-    candidates = candidates.filter(c => getEffectiveMinimum(c, defaultSize) <= maxSize);
-
-    // Prioritize by signal quality
-    candidates.sort((a, b) => {
+export function sortCandidatesBySignal(candidates: ChannelCandidate[]): ChannelCandidate[] {
+    return candidates.slice().sort((a, b) => {
         // 1. Manual source always comes before others
         const aManual = a.sources.includes('manual');
         const bManual = b.sources.includes('manual');
@@ -102,6 +90,25 @@ export function createPlan(options: PlanOptions): OpenPlan {
         // 5. Recency
         return b.addedAt.getTime() - a.addedAt.getTime();
     });
+}
+
+/**
+ * Create a batch open plan
+ */
+export function createPlan(options: PlanOptions): OpenPlan {
+    const { budget, defaultSize, maxSize } = options;
+
+    // Get candidates - either from options or storage
+    let candidates = options.candidates ?? loadCandidates();
+
+    // Filter to eligible candidates only
+    candidates = candidates.filter(c => isEligible(c, options.openPeerPubkeys));
+
+    // Filter out candidates with minimum > maxSize
+    candidates = candidates.filter(c => getEffectiveMinimum(c, defaultSize) <= maxSize);
+
+    // Prioritize by signal quality
+    candidates = sortCandidatesBySignal(candidates);
 
     // Allocate budget
     const plannedChannels: PlannedChannel[] = [];
@@ -228,32 +235,4 @@ export function formatSats(sats: number): string {
     return sats.toString();
 }
 
-/**
- * Display the plan in a formatted way
- */
-export function formatPlan(plan: OpenPlan): string {
-    const lines: string[] = [];
 
-    lines.push('');
-    lines.push(`Budget: ${formatSats(plan.budget)} | Default: ${formatSats(plan.defaultSize)} | Max: ${formatSats(plan.maxSize)}`);
-    lines.push(`Note: Each channel includes an additional ${formatSats(ANCHOR_RESERVE)} anchor reserve.`);
-    lines.push('─'.repeat(80));
-    lines.push('  #  Pubkey          Amount      Notes            Alias');
-    lines.push('─'.repeat(80));
-
-    plan.channels.forEach((ch, i) => {
-        const num = (i + 1).toString().padStart(3);
-        const pubkey = ch.pubkey.slice(0, 12) + '...';
-        const amount = formatSats(ch.amount).padStart(10);
-        const notes = ch.isMinimumEnforced ? 'min enforced'.padEnd(16) : ''.padEnd(16);
-        const alias = ch.alias.slice(0, 25);
-
-        lines.push(`${num}  ${pubkey}  ${amount}  ${notes}  ${alias}`);
-    });
-
-    lines.push('─'.repeat(80));
-    lines.push(`Total: ${plan.channels.length} channels, ${formatSats(plan.totalAmount)} | Remaining: ${formatSats(plan.remainingBudget)}`);
-    lines.push('');
-
-    return lines.join('\n');
-}
