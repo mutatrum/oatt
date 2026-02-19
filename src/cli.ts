@@ -14,6 +14,7 @@ import { runGraphDistanceCollection } from './collectors/graph-distance.js';
 import { connectLnd, getNodeInfo, getOwnPubkey, getForwardingHistory, getChainBalance } from './lnd.js';
 import { REJECTION_CONFIG, type RejectionReason, type ChannelCandidate, type OpenPlan } from './models.js';
 import { createPlan, addToPlan, removeFromPlan, resizeInPlan, isEligible, sortCandidatesBySignal } from './planner.js';
+import inquirer from 'inquirer';
 
 const program = new Command();
 
@@ -312,6 +313,20 @@ function formatSats(sats: number | undefined | null): string {
     return sats.toString();
 }
 
+/**
+ * Helper to prompt for final batch execution confirmation
+ */
+async function confirmBatchExec(plan: OpenPlan): Promise<boolean> {
+    renderPlanTable(plan);
+    const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: chalk.cyan('Proceed with creating PSBT and broadcasting?'),
+        default: true,
+    }]);
+    return confirm;
+}
+
 function renderPlanTable(plan: OpenPlan) {
     const candidates = loadCandidates();
     
@@ -442,7 +457,7 @@ program
     .option('-m, --max-size <sats>', 'Maximum channel size', '10000000')
     .action(async (options) => {
         const { createPlan, addToPlan, removeFromPlan, resizeInPlan, formatSats } = await import('./planner.js');
-        const inquirer = await import('inquirer');
+        
         const { getChainBalance, connectLnd } = await import('./lnd.js');
 
         let budget: number;
@@ -462,7 +477,7 @@ program
                 console.log(chalk.gray(`\nAvailable on-chain balance: ${formatSats(available)}`));
                 // Suggest 100% of balance, user can adjust if they want to leave some for fees
                 const suggested = available;
-                const { budgetInput } = await inquirer.default.prompt([{
+                const { budgetInput } = await inquirer.prompt([{
                     type: 'number',
                     name: 'budgetInput',
                     message: 'Enter budget in sats:',
@@ -503,7 +518,7 @@ program
         // Interactive loop
         let done = false;
         while (!done) {
-            const { action } = await inquirer.default.prompt([{
+            const { action } = await inquirer.prompt([{
                 type: 'list',
                 name: 'action',
                 message: 'Action:',
@@ -520,14 +535,14 @@ program
 
             switch (action) {
                 case 'execute': {
-                    const { confirm } = await inquirer.default.prompt([{
+                    const { confirm } = await inquirer.prompt([{
                         type: 'confirm',
                         name: 'confirm',
                         message: `Open ${plan.channels.length} channels for ${formatSats(plan.totalAmount)}?`,
                         default: false,
                     }]);
                     if (confirm) {
-                        const { feeRate } = await inquirer.default.prompt([{
+                        const { feeRate } = await inquirer.prompt([{
                             type: 'number',
                             name: 'feeRate',
                             message: 'Enter fee rate (sats/vB):',
@@ -545,7 +560,8 @@ program
                                 availableCandidates: candidates,
                                 openPeerPubkeys,
                                 defaultSize,
-                                maxSize
+                                maxSize,
+                                requestConfirmation: confirmBatchExec
                             });
                         } catch (err: any) {
                             console.log(chalk.red('\n✗ Batch execution failed:'));
@@ -556,7 +572,7 @@ program
 
                         const failures = results.filter(r => !r.success);
                         if (failures.length > 0) {
-                            const { retry } = await inquirer.default.prompt([{
+                            const { retry } = await inquirer.prompt([{
                                 type: 'confirm',
                                 name: 'retry',
                                 message: 'Batch had failures. Refresh plan and retry?',
@@ -573,7 +589,7 @@ program
                     break;
                 }
                 case 'add': {
-                    const { pubkey } = await inquirer.default.prompt([{
+                    const { pubkey } = await inquirer.prompt([{
                         type: 'input',
                         name: 'pubkey',
                         message: 'Pubkey to add:',
@@ -589,14 +605,14 @@ program
                     break;
                 }
                 case 'remove': {
-                    const { index } = await inquirer.default.prompt([{
+                    const { index } = await inquirer.prompt([{
                         type: 'number',
                         name: 'index',
                         message: 'Channel number to remove:',
                     }]);
                     if (index !== undefined && index > 0 && index <= plan.channels.length) {
                         const channel = plan.channels[index - 1];
-                        const { reason } = await inquirer.default.prompt([{
+                        const { reason } = await inquirer.prompt([{
                             type: 'list',
                             name: 'reason',
                             message: `Why remove ${channel.alias}?`,
@@ -623,7 +639,7 @@ program
                     break;
                 }
                 case 'resize': {
-                    const { index, amount } = await inquirer.default.prompt([
+                    const { index, amount } = await inquirer.prompt([
                         { type: 'number', name: 'index', message: 'Channel number:' },
                         { type: 'number', name: 'amount', message: 'New amount (sats):' },
                     ]);
@@ -667,7 +683,7 @@ program
     .action(async (options) => {
         const { createPlan, formatSats } = await import('./planner.js');
         const { executePlan, formatResults, generateBosCommand } = await import('./opener.js');
-        const inquirer = await import('inquirer');
+        
 
         // Create plan from budget
         if (!options.budget) {
@@ -707,7 +723,7 @@ program
         }
 
         // Confirm before executing
-        const { confirm } = await inquirer.default.prompt([{
+        const { confirm } = await inquirer.prompt([{
             type: 'confirm',
             name: 'confirm',
             message: `Open ${plan.channels.length} channels for ${formatSats(plan.totalAmount)}?`,
@@ -715,7 +731,7 @@ program
         }]);
 
         if (confirm) {
-            const { feeRate } = await inquirer.default.prompt([{
+            const { feeRate } = await inquirer.prompt([{
                 type: 'number',
                 name: 'feeRate',
                 message: 'Enter fee rate (sats/vB):',
@@ -732,6 +748,7 @@ program
                     openPeerPubkeys,
                     defaultSize: parseInt(options.defaultSize),
                     maxSize: parseInt(options.maxSize),
+                    requestConfirmation: confirmBatchExec
                 });
                 console.log(formatResults(results));
                 process.exit(0);

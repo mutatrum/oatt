@@ -175,6 +175,7 @@ export interface OpenOptions {
     openPeerPubkeys?: Set<string>;
     defaultSize?: number;
     maxSize?: number;
+    requestConfirmation?: (plan: OpenPlan) => Promise<boolean>;
 }
 
 interface ChannelOpenAttempt {
@@ -192,7 +193,16 @@ interface ChannelOpenAttempt {
  * Execute a PSBT-batched channel open with opportunistic backfilling
  */
 export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Promise<OpenResult[]> {
-    const { dryRun = false, feeRate, onProgress, availableCandidates: overrideCandidates, openPeerPubkeys, defaultSize = plan.defaultSize, maxSize = plan.maxSize } = options;
+    const { 
+        dryRun = false, 
+        feeRate, 
+        onProgress, 
+        availableCandidates: overrideCandidates, 
+        openPeerPubkeys, 
+        defaultSize = plan.defaultSize, 
+        maxSize = plan.maxSize,
+        requestConfirmation
+    } = options;
     const log = onProgress ?? console.log;
 
     // Ensure LND is connected
@@ -205,7 +215,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     let backfilled = false;
     let iteration = 0;
     let pendingStarted = false;
-    const MAX_ITERATIONS = 10;
+    const MAX_ITERATIONS = 30; // Increased to handle larger candidate pools "forever"
 
     while (iteration < MAX_ITERATIONS) {
         iteration++;
@@ -406,14 +416,20 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         }
     }
     
-    if (!pendingStarted) {
-        log(chalk.red('\n✗ Failed to initiate channel batch after multiple attempts.'));
-        return results;
-    }
-
     if (attempts.length === 0) {
         log(chalk.yellow('No viable nodes left to open.'));
         return results;
+    }
+
+    // NEW: Final confirmation before PSBT creation
+    if (requestConfirmation) {
+        log(chalk.bold('\nFinal Batch Plan Verification'));
+        const confirmed = await requestConfirmation(currentPlan);
+        if (!confirmed) {
+            log(chalk.red('\n✗ Batch aborted by user.'));
+            await cancelAllPending(lnd, attempts, log);
+            return results; // Return current results (all success=false or pending)
+        }
     }
 
     // Step 3: Create PSBT with all outputs
