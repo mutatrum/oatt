@@ -168,7 +168,7 @@ export async function collectForwardingCandidates(
         candidates.push({
             pubkey: score.pubkey,
             alias: nodeInfo.alias,
-            source: 'forwarding_history',
+            sources: ['forwarding_history'],
             addedAt: existing?.addedAt ?? new Date(),
             channels: nodeInfo.channels,
             capacitySats: nodeInfo.capacitySats,

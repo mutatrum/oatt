@@ -68,7 +68,7 @@ export interface Rejection {
 export interface ChannelCandidate {
     pubkey: string;
     alias: string;
-    source: CandidateSource;
+    sources: CandidateSource[];
     addedAt: Date;
 
     // Node metrics from graph

@@ -139,7 +139,7 @@ export async function collectForceClosedCandidates(): Promise<ChannelCandidate[]
         const candidate: ChannelCandidate = {
             pubkey,
             alias: nodeInfo.alias,
-            source: 'force_closed',
+            sources: ['force_closed'],
             addedAt: existing?.addedAt ?? new Date(),
             channels: nodeInfo.channels,
             capacitySats: nodeInfo.capacitySats,

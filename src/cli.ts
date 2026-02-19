@@ -98,7 +98,7 @@ collectCmd
             upsertCandidate({
                 pubkey,
                 alias: nodeInfo.alias,
-                source: 'manual',
+                sources: ['manual'],
                 addedAt: new Date(),
                 channels: nodeInfo.channels,
                 capacitySats: nodeInfo.capacitySats,
@@ -159,89 +159,92 @@ program
 
         // Display
         console.log(chalk.bold(`\n${filtered.length} candidates:\n`));
-        console.log(formatCandidateHeader());
+        console.log(chalk.gray(
+            'Alias                 Pubkey       Sources      Ch  Cap  Dist  Min Size  Status         Age'
+        ));
 
         for (const candidate of filtered) {
-            console.log(formatCandidate(candidate, options.all));
+            const c = candidate;
+            const pubkey = c.pubkey.slice(0, 10) + '...';
+            const channels = c.channels.toString().padStart(2);
+            const capacity = formatSats(c.capacitySats).padStart(5);
+            const distance = (c.distance?.toString() ?? '-').padStart(4);
+            const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(8) : '        -';
+            const alias = c.alias.slice(0, 20).padEnd(20);
+            const age = Math.floor((Date.now() - c.addedAt.getTime()) / (1000 * 60 * 60 * 24));
+
+            const sourceLabels = c.sources.map(s => {
+                switch (s) {
+                    case 'force_closed': return 'Closed';
+                    case 'graph_distance': return 'Graph';
+                    case 'forwarding_history': return 'Forwards';
+                    case 'manual': return 'Manual';
+                    default: return s;
+                }
+            }).join('|');
+            const sources = sourceLabels.padEnd(10);
+
+            // Determine status
+            let status = 'Eligible';
+            let statusColor = chalk.green;
+
+            if (c.rejections.length > 0) {
+                const blocking = c.rejections.find(r => !REJECTION_CONFIG[r.reason].retryable);
+                if (blocking) {
+                    status = 'Blocked';
+                    statusColor = chalk.red;
+                } else {
+                    // Check for most recent cooldown
+                    let maxWaitDays = 0;
+                    for (const r of c.rejections) {
+                        const config = REJECTION_CONFIG[r.reason];
+                        if (config.cooldownDays) {
+                            const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
+                            const elapsedMs = Date.now() - new Date(r.date).getTime();
+                            const remainingMs = cooldownMs - elapsedMs;
+                            if (remainingMs > 0) {
+                                const remainingDays = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
+                                maxWaitDays = Math.max(maxWaitDays, remainingDays);
+                            }
+                        }
+                    }
+                    if (maxWaitDays > 0) {
+                        status = `Wait ${maxWaitDays}d`;
+                        statusColor = chalk.yellow;
+                    }
+                }
+            }
+
+            const statusStr = statusColor(status.padEnd(13));
+            let line = `${alias} ${pubkey} ${sources} ${channels} ${capacity} ${distance} ${minSize} ${statusStr} ${age}d`;
+
+            if (options.all && c.rejections.length > 0) {
+                const rejectionLines = c.rejections.map(r => {
+                    const config = REJECTION_CONFIG[r.reason];
+                    let cooldownInfo = '';
+
+                    if (config.retryable && config.cooldownDays) {
+                        const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
+                        const elapsedMs = Date.now() - new Date(r.date).getTime();
+                        const remainingMs = cooldownMs - elapsedMs;
+
+                        if (remainingMs > 0) {
+                            const h = Math.floor(remainingMs / (60 * 60 * 1000));
+                            const hoursStr = h > 0 ? `${h}h ` : '';
+                            const m = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+                            cooldownInfo = chalk.cyan(` [Active Cooldown: ${hoursStr}${m}m remaining]`);
+                        }
+                    }
+
+                    return `    ${chalk.gray(new Date(r.date).toLocaleDateString())} ${chalk.yellow(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}${cooldownInfo}`;
+                });
+                line += '\n' + rejectionLines.join('\n');
+            }
+            console.log(line);
         }
 
         console.log('');
     });
-
-function formatCandidateHeader(): string {
-    return chalk.gray(
-        'Pubkey          Channels  Capacity  Distance  Min Size  Source        Status         Alias'
-    );
-}
-
-function formatCandidate(c: ChannelCandidate, showDetails: boolean): string {
-    const pubkey = c.pubkey.slice(0, 12) + '...';
-    const channels = c.channels.toString().padStart(8);
-    const capacity = formatSats(c.capacitySats).padStart(10);
-    const distance = (c.distance?.toString() ?? '-').padStart(8);
-    const minSize = c.minChannelSize ? formatSats(c.minChannelSize).padStart(10) : '         -';
-    const source = c.source.padEnd(12);
-    const alias = c.alias.slice(0, 25);
-
-    // Determine status
-    let status = 'Eligible';
-    let statusColor = chalk.green;
-
-    if (c.rejections.length > 0) {
-        const blocking = c.rejections.find(r => !REJECTION_CONFIG[r.reason].retryable);
-        if (blocking) {
-            status = 'Blocked';
-            statusColor = chalk.red;
-        } else {
-            // Check for most recent cooldown
-            let maxWaitDays = 0;
-            for (const r of c.rejections) {
-                const config = REJECTION_CONFIG[r.reason];
-                if (config.cooldownDays) {
-                    const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
-                    const elapsedMs = Date.now() - new Date(r.date).getTime();
-                    const remainingMs = cooldownMs - elapsedMs;
-                    if (remainingMs > 0) {
-                        const remainingDays = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
-                        maxWaitDays = Math.max(maxWaitDays, remainingDays);
-                    }
-                }
-            }
-            if (maxWaitDays > 0) {
-                status = `Wait ${maxWaitDays}d`;
-                statusColor = chalk.yellow;
-            }
-        }
-    }
-
-    const statusStr = statusColor(status.padEnd(13));
-    let line = `${pubkey}  ${channels}  ${capacity}  ${distance}  ${minSize}  ${source}  ${statusStr}  ${alias}`;
-
-    if (showDetails && c.rejections.length > 0) {
-        const rejectionLines = c.rejections.map(r => {
-            const config = REJECTION_CONFIG[r.reason];
-            let cooldownInfo = '';
-            
-            if (config.retryable && config.cooldownDays) {
-                const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
-                const elapsedMs = Date.now() - new Date(r.date).getTime();
-                const remainingMs = cooldownMs - elapsedMs;
-                
-                if (remainingMs > 0) {
-                    const h = Math.floor(remainingMs / (60 * 60 * 1000));
-                    const hoursStr = h > 0 ? `${h}h ` : '';
-                    const m = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
-                    cooldownInfo = chalk.cyan(` [Active Cooldown: ${hoursStr}${m}m remaining]`);
-                }
-            }
-            
-            return `    ${chalk.gray(new Date(r.date).toLocaleDateString())} ${chalk.yellow(r.reason)}: ${r.details ?? ''} ${r.minChannelSize ? formatSats(r.minChannelSize) : ''}${cooldownInfo}`;
-        });
-        line += '\n' + rejectionLines.join('\n');
-    }
-
-    return line;
-}
 
 function formatSats(sats: number | undefined | null): string {
     if (sats === undefined || sats === null) {
@@ -335,11 +338,13 @@ program
             console.log(`  Eligible: ${eligible.length}`);
 
             const bySource = candidates.reduce((acc, c) => {
-                acc[c.source] = (acc[c.source] ?? 0) + 1;
+                c.sources.forEach(source => {
+                    acc[source] = (acc[source] ?? 0) + 1;
+                });
                 return acc;
             }, {} as Record<string, number>);
 
-            console.log('\n  By source:');
+            console.log('\n  By sources:');
             for (const [source, count] of Object.entries(bySource)) {
                 console.log(`    ${source}: ${count}`);
             }
@@ -367,7 +372,7 @@ program
 
         let budget: number;
         let openPeerPubkeys: Set<string> | undefined;
-        
+
         try {
             await connectLnd();
             const balance = await getChainBalance();
@@ -375,7 +380,7 @@ program
 
             const channels = await import('./lnd.js').then(m => m.getChannels());
             openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
-            
+
             if (options.budget) {
                 budget = parseInt(options.budget);
             } else {

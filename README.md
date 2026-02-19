@@ -14,14 +14,15 @@ OATT (Open All The Things) automates this cycle into a single, cohesive workflow
 
 ## The Workflow
 
-1. **Collect**: OATT gathers candidates from your node's history (smart force-close detection) and the network graph (BFS distance analysis).
+1. **Collect**: OATT gathers candidates from your node's history (smart force-close detection), forwarding history (identifying profitable routing partners), and the network graph (BFS distance analysis).
 2. **Plan**: You define a budget. OATT automatically suggests an allocation that maximizes the number of channels while respecting known minimums. You can interactively add, remove, or resize channels.
 3. **Execute**: Channels are opened in a single, efficient PSBT batch transaction to minimize on-chain fees.
-4. **Learn**: Failures are automatically parsed. If a node rejects a channel for being too small, OATT records that minimum and applies it to your next planning session.
+4. **Learn**: Failures are automatically parsed. If a node rejects a channel for being too small, OATT records that minimum and applies it to your next planning session. Candidates that appear in multiple collectors are tagged with multiple sources, providing a stronger "multi-signal" for selection.
 
 ## Features
 
-- **Collect candidates** from force-closed channels and graph distance analysis
+- **Collect candidates** from force-closed channels, forwarding history, and graph distance analysis
+- **Multi-source tracking**: Candidates found by multiple algorithms are tagged (e.g., `[Graph|Forwards]`) to highlight high-quality routing partners.
 - **Track rejections** with reasons and minimum channel sizes
 - **Plan batch opens** with budget optimization
 - **Execute opens** via ln-service
@@ -94,6 +95,13 @@ oatt collect graph -d 2 -c 10 -s 10000000
 #   -d, --min-distance <n>     Minimum distance from your node (default: 2)
 #   -c, --min-channels <n>     Minimum channels the node should have (default: 10)
 #   -s, --min-capacity <sats>  Minimum capacity in sats (default: 10000000)
+
+# From forwarding history (fee/volume scoring)
+oatt collect forwards --days 30 --top-n 20
+# Options:
+#   -d, --days <n>             Days of history to analyse (default: 30)
+#   -n, --top-n <n>            Number of top candidates to output (default: 20)
+#   -s, --min-score <sats>     Minimum fee sats to qualify (default: 0)
 
 # Manually add a node
 oatt collect add <pubkey>

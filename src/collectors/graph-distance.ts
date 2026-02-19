@@ -170,7 +170,7 @@ export async function collectGraphDistanceCandidates(options?: {
         const candidate: ChannelCandidate = {
             pubkey,
             alias: node.alias,
-            source: 'graph_distance',
+            sources: ['graph_distance'],
             addedAt: existing?.addedAt ?? new Date(),
             channels: node.channels,
             capacitySats: node.capacity,

@@ -78,8 +78,8 @@ export function createPlan(options: PlanOptions): OpenPlan {
     // Prioritize manual candidates first, then by effective minimum (lowest first to maximize channel count)
   candidates.sort((a, b) => {
     // Manual source always comes before others
-    if (a.source === 'manual' && b.source !== 'manual') return -1;
-    if (a.source !== 'manual' && b.source === 'manual') return 1;
+    if (a.sources.includes('manual') && !b.sources.includes('manual')) return -1;
+    if (!a.sources.includes('manual') && b.sources.includes('manual')) return 1;
 
     // Then sort by minimum size
     const minA = getEffectiveMinimum(a, defaultSize);

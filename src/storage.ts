@@ -81,10 +81,11 @@ export function upsertCandidate(candidate: ChannelCandidate): void {
     const index = candidates.findIndex(c => c.pubkey === candidate.pubkey);
 
     if (index >= 0) {
-        // Merge: keep existing history and rejections, update metrics
+        // Merge: keep existing history and rejections, update metrics, merge sources
         const existing = candidates[index];
         candidates[index] = {
             ...candidate,
+            sources: Array.from(new Set([...existing.sources, ...candidate.sources])),
             history: [...existing.history, ...candidate.history.filter(
                 h => !existing.history.some(eh => eh.channelId === h.channelId)
             )],
@@ -126,15 +127,27 @@ export function addRejection(pubkey: string, rejection: Rejection): void {
 }
 
 /**
- * Remove candidates by source
+ * Remove candidates by source (or just remove the source if multiple sources exist)
  */
 export function removeCandidatesBySource(source: CandidateSource): number {
     const candidates = loadCandidates();
-    const filtered = candidates.filter(c => c.source !== source);
-    const removedCount = candidates.length - filtered.length;
+    let removedCount = 0;
     
-    if (removedCount > 0) {
-        saveCandidates(filtered);
+    const updated = candidates.map(c => {
+        if (c.sources.includes(source)) {
+            const remainingSources = c.sources.filter(s => s !== source);
+            if (remainingSources.length === 0) {
+                removedCount++;
+                return null; // Entire candidate removed
+            }
+            // Candidate stays, but source is removed
+            return { ...c, sources: remainingSources };
+        }
+        return c;
+    }).filter((c): c is ChannelCandidate => c !== null);
+
+    if (removedCount > 0 || updated.length !== candidates.length) {
+        saveCandidates(updated);
     }
     
     return removedCount;
@@ -151,11 +164,14 @@ export async function syncCandidateInfo(pubkey: string): Promise<void> {
         upsertCandidate({
             pubkey,
             alias: info.alias,
+            sources: ['manual'], // Default to manual if we're syncing specifically like this
             channels: info.channels,
             capacitySats: info.capacitySats,
             lastUpdate: info.lastUpdate,
-            addedAt: new Date(), // Reset addedAt for fresh sync?
-        } as any);
+            addedAt: new Date(),
+            history: [],
+            rejections: [],
+        } as ChannelCandidate);
     }
 }
 
