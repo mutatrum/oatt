@@ -16,8 +16,9 @@ OATT (Open All The Things) automates this cycle into a single, cohesive workflow
 
 1. **Collect**: OATT gathers candidates from your node's history (smart force-close detection), forwarding history (identifying profitable routing partners), and the network graph (BFS distance analysis).
 2. **Plan**: You define a budget. OATT automatically suggests an allocation that maximizes the number of channels while respecting known minimums. You can interactively add, remove, or resize channels.
-3. **Execute**: Channels are opened in a single, efficient PSBT batch transaction to minimize on-chain fees.
-4. **Learn**: Failures are automatically parsed. If a node rejects a channel for being too small, OATT records that minimum and applies it to your next planning session. Candidates that appear in multiple collectors are tagged with multiple sources, providing a stronger "multi-signal" for selection.
+3. **Execute & Converge**: Channels are opened in a single, efficient PSBT batch transaction. OATT uses a **Convergence Loop** that automatically re-plans the batch if any peer fails to connect or rejects the initiation (Step 2). It backfills your budget with next-best candidates on the fly.
+4. **Safety Verification**: Before any on-chain transaction is broadcast, OATT presents the final converged plan for approval. If you abort, it automatically cleans up LND's pending stubs.
+5. **Learn**: Failures are automatically parsed. If a node rejects a channel for being too small, OATT records that minimum and applies it to your next planning session. Candidates that appear in multiple collectors are tagged with multiple sources, providing a stronger "multi-signal" for selection.
 
 ## Features
 
@@ -25,7 +26,10 @@ OATT (Open All The Things) automates this cycle into a single, cohesive workflow
 - **Multi-source tracking**: Candidates found by multiple algorithms are tagged (e.g., `[Graph|Forwards]`) to highlight high-quality routing partners.
 - **Track rejections** with reasons and minimum channel sizes
 - **Plan batch opens** with budget optimization
-- **Execute opens** via ln-service
+- **Execute opens** via ln-service with PSBT batching.
+- **Opportunistic Backfilling**: Automatic re-planning during execution to maximize budget usage when peers are offline or flukey.
+- **Smart Partner Filtering**: Automatically skips candidates with existing **active or pending** channels.
+- **Safety Guards**: Final user confirmation before broadcast + automatic pending stub cleanup on abort.
 
 ## Installation
 
@@ -134,12 +138,14 @@ oatt remove <pubkey>
 ```
 
 Valid rejection reasons:
-- `min_channel_size` - Node requires minimum channel size
-- `no_capacity` - Node has no available capacity
-- `not_accepting` - Node is not accepting channels
-- `disconnected` - Node is offline/disconnected
-- `fee_too_high` - Node's fees are too high
-- `other` - Other reasons
+- `min_channel_size` - Node requires minimum channel size (learned and buffered)
+- `already_open` - Node already has an active or pending channel (filtered)
+- `failed_to_connect` - Node was unreachable (Tor/Clearnet)
+- `not_online` - Node is currently offline
+- `too_many_pending` - Remote peer has too many pending channels
+- `coop_close` - Recent cooperative close (blocked)
+- `no_anchors` - Node doesn't support anchors (blocked)
+- `internal_error` - Unexpected LND/Node error
 
 ### Plan Batch Opens
 
