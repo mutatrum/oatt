@@ -145,7 +145,7 @@ export function createPlan(options: PlanOptions): OpenPlan {
         defaultSize,
         maxSize,
         channels: plannedChannels,
-        totalAmount: budget - remaining,
+        totalAmount: plannedChannels.reduce((sum, ch) => sum + ch.amount, 0),
         remainingBudget: remaining,
     };
 }
