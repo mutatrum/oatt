@@ -11,9 +11,9 @@
 import * as lnService from 'ln-service';
 import chalk from 'chalk';
 import { connectLnd, getNodeInfo } from './lnd.js';
-import { addRejection, saveOpenHistory } from './storage.js';
-import { formatSats } from './planner.js';
-import type { OpenPlan, OpenResult, OpenHistory, RejectionReason } from './models.js';
+import { createPlan, formatSats } from './planner.js';
+import { loadCandidates, addRejection, saveOpenHistory } from './storage.js';
+import type { OpenPlan, OpenResult, OpenHistory, RejectionReason, ChannelCandidate } from './models.js';
 
 /**
  * Parse LND error messages to extract rejection reason and implicated pubkey
@@ -171,6 +171,10 @@ export interface OpenOptions {
     dryRun?: boolean;
     feeRate?: number;  // sats/vbyte
     onProgress?: (message: string) => void;
+    availableCandidates?: ChannelCandidate[];
+    openPeerPubkeys?: Set<string>;
+    defaultSize?: number;
+    maxSize?: number;
 }
 
 interface ChannelOpenAttempt {
@@ -185,204 +189,177 @@ interface ChannelOpenAttempt {
 }
 
 /**
- * Execute a PSBT-batched channel open
+ * Execute a PSBT-batched channel open with opportunistic backfilling
  */
 export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Promise<OpenResult[]> {
-    const { dryRun = false, feeRate, onProgress } = options;
+    const { dryRun = false, feeRate, onProgress, availableCandidates: overrideCandidates, openPeerPubkeys, defaultSize = plan.defaultSize, maxSize = plan.maxSize } = options;
     const log = onProgress ?? console.log;
 
     // Ensure LND is connected
     const { lnd } = await connectLnd();
 
     const results: OpenResult[] = [];
-    const attempts: ChannelOpenAttempt[] = plan.channels.map(ch => ({
-        pubkey: ch.pubkey,
-        alias: ch.alias,
-        amount: ch.amount,
-    }));
+    let currentPlan = plan;
+    let attempts: ChannelOpenAttempt[] = [];
+    let backfilled = false;
+    let iteration = 0;
+    const MAX_ITERATIONS = 5;
 
-    if (dryRun) {
-        log('DRY RUN - Simulating batch open...');
-        for (const attempt of attempts) {
-            results.push({
-                pubkey: attempt.pubkey,
-                success: true,
-                channelId: `dry-run:${attempt.pubkey.slice(0, 8)}`,
-            });
-        }
-        return results;
-    }
-
-    // Step 0: Pre-verify connections and fetch fresh info
-    log('Step 1/5: Verifying peer connectivity...');
-    const { getConnectedPeers, connectPeer } = await import('./lnd.js');
-    const [nodeInfos, connectedPeers] = await Promise.all([
-        Promise.all(
-            attempts.map(async (a) => {
-                try {
-                    const info = await getNodeInfo(a.pubkey);
-                    return { pubkey: a.pubkey, info };
-                } catch {
-                    return { pubkey: a.pubkey, info: null };
-                }
-            })
-        ),
-        getConnectedPeers()
-    ]);
-    
-    const infoMap = new Map(nodeInfos.map(n => [n.pubkey, n.info]));
-    const connectedSet = new Set(connectedPeers);
-
-    // Verify all peers in small batches to avoid overwhelming Tor proxy
-    const BATCH_SIZE = 3;
-    const verificationResults: { attempt: ChannelOpenAttempt; success: boolean; reason?: RejectionReason; errorMsg?: string }[] = [];
-    
-    for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
-        const batch = attempts.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(batch.map(async (attempt) => {
-            // Already connected?
-            if (connectedSet.has(attempt.pubkey)) {
-                log(`  • ${attempt.alias}: Already connected`);
-                return { attempt, success: true };
-            }
-
-            const info = infoMap.get(attempt.pubkey);
-            if (!info || info.addresses.length === 0) {
-                const reason: RejectionReason = info ? 'no_address' : 'not_online';
-                const errorMsg = info ? 'Node has no addresses in graph' : 'Node not found in graph';
-                return { attempt, success: false, reason, errorMsg };
-            }
-
-            // Try all addresses for this peer (deduplicated)
-            const uniqueAddresses = Array.from(new Set(info.addresses));
-            log(`  • ${attempt.alias}: Connecting to ${uniqueAddresses.length} addresses...`);
-            let lastError = 'Failed to connect';
-            for (let j = 0; j < uniqueAddresses.length; j++) {
-                const address = uniqueAddresses[j];
-                try {
-                    // Use a 15 second timeout for each attempt
-                    await connectPeer(attempt.pubkey, address, 15000);
-                    log(`  ✓ ${attempt.alias}: Connected`);
-                    return { attempt, success: true };
-                } catch (err) {
-                    const parsed = parseOpenError(err);
-                    lastError = parsed.details;
-                    
-                    // Specific logging for Tor proxy errors
-                    if (lastError.includes('tor general error')) {
-                        log(`    - ${attempt.alias} | ${address} failed: Tor proxy error (check your Tor status)`);
-                    } else {
-                        log(`    - ${attempt.alias} | ${address} failed: ${lastError}`);
-                    }
-                }
-            }
-
-            return { 
-                attempt, 
-                success: false, 
-                reason: 'failed_to_connect' as RejectionReason, 
-                errorMsg: `Failed to connect: ${lastError}` 
-            };
+    while (iteration < MAX_ITERATIONS) {
+        iteration++;
+        backfilled = false;
+        attempts = currentPlan.channels.map(ch => ({
+            pubkey: ch.pubkey,
+            alias: ch.alias,
+            amount: ch.amount,
         }));
+
+        if (attempts.length === 0) break;
+
+        if (dryRun) {
+            log('DRY RUN - Simulating batch open...');
+            for (const attempt of attempts) {
+                results.push({
+                    pubkey: attempt.pubkey,
+                    success: true,
+                    channelId: `dry-run:${attempt.pubkey.slice(0, 8)}`,
+                });
+            }
+            return results;
+        }
+
+        // Step 1: Pre-verify connections
+        log(`Step 1/5: Verifying peer connectivity (Attempt ${iteration})...`);
+        const { getConnectedPeers, connectPeer } = await import('./lnd.js');
+        const [nodeInfos, connectedPeers] = await Promise.all([
+            Promise.all(
+                attempts.map(async (a) => {
+                    try {
+                        const info = await getNodeInfo(a.pubkey);
+                        return { pubkey: a.pubkey, info };
+                    } catch {
+                        return { pubkey: a.pubkey, info: null };
+                    }
+                })
+            ),
+            getConnectedPeers()
+        ]);
         
-        verificationResults.push(...batchResults);
-    }
+        const infoMap = new Map(nodeInfos.map(n => [n.pubkey, n.info]));
+        const connectedSet = new Set(connectedPeers);
+        const BATCH_SIZE = 3;
+        let dropoutCount = 0;
 
-    const viableAttempts: ChannelOpenAttempt[] = [];
-    for (const res of verificationResults) {
-        if (res.success) {
-            viableAttempts.push(res.attempt);
-        } else {
-            results.push({
-                pubkey: res.attempt.pubkey,
-                success: false,
-                error: res.errorMsg!,
-                rejectionReason: res.reason!,
+        for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
+            const batch = attempts.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(batch.map(async (attempt) => {
+                if (connectedSet.has(attempt.pubkey)) return { attempt, success: true };
+
+                const info = infoMap.get(attempt.pubkey);
+                if (!info || info.addresses.length === 0) {
+                    const reason: RejectionReason = info ? 'no_address' : 'not_online';
+                    return { attempt, success: false, reason, errorMsg: info ? 'No addresses' : 'Offline' };
+                }
+
+                const uniqueAddresses = Array.from(new Set(info.addresses));
+                for (const address of uniqueAddresses) {
+                    try {
+                        await connectPeer(attempt.pubkey, address, 15000);
+                        return { attempt, success: true };
+                    } catch (err) { }
+                }
+
+                return { attempt, success: false, reason: 'failed_to_connect' as RejectionReason, errorMsg: 'Connection failed' };
+            }));
+
+            for (const res of batchResults) {
+                if (!res.success) {
+                    log(chalk.yellow(`✗ Node ${res.attempt.alias} failed to connect. Dropping and re-planning...`));
+                    addRejection(res.attempt.pubkey, {
+                        date: new Date(),
+                        reason: res.reason!,
+                        details: res.errorMsg!,
+                    });
+                    dropoutCount++;
+                }
+            }
+        }
+
+        if (dropoutCount > 0) {
+            log(chalk.blue(`ℹ ${dropoutCount} nodes failed connection. Re-planning to backfill budget...`));
+            currentPlan = createPlan({
+                budget: currentPlan.budget,
+                defaultSize,
+                maxSize,
+                openPeerPubkeys,
+                candidates: overrideCandidates ?? loadCandidates()
             });
+            backfilled = true;
+            continue; // Re-attempt connection phase with new plan
+        }
 
-            addRejection(res.attempt.pubkey, {
-                date: new Date(),
-                reason: res.reason!,
-                details: res.errorMsg!,
+        // Step 2: Initiate pending channels
+        log(`Step 2/5: Initiating ${attempts.length} channel opens...`);
+        const channelsToOpen: lnService.OpenChannelsChannel[] = attempts.map(a => ({
+            capacity: a.amount,
+            partner_public_key: a.pubkey,
+        }));
+
+        try {
+            const result = await lnService.openChannels({
+                lnd,
+                channels: channelsToOpen,
+                is_avoiding_broadcast: true,
             });
             
-            log(`✗ Skipping ${res.attempt.alias}: ${res.errorMsg}`);
-        }
-    }
-
-    if (viableAttempts.length === 0) {
-        log('No viable nodes left to open in this batch.');
-        saveHistory(plan, results);
-        return results;
-    }
-
-    // Step 1: Initiate pending channels with remaining peers
-    log(`Step 2/5: Initiating ${viableAttempts.length} channel opens...`);
-
-    const channelsToOpen: lnService.OpenChannelsChannel[] = viableAttempts.map(a => ({
-        capacity: a.amount,
-        partner_public_key: a.pubkey,
-    }));
-
-    let pendingChannels: lnService.PendingChannel[];
-
-    try {
-        const result = await lnService.openChannels({
-            lnd,
-            channels: channelsToOpen,
-            is_avoiding_broadcast: true,  // We'll broadcast ourselves after PSBT
-        });
-        pendingChannels = result.pending;
-    } catch (error) {
-        const parsed = parseOpenError(error);
-        log(`Batch open failed: ${parsed.details}`);
-        
-        let reasonStr = `Reason: ${parsed.reason}`;
-        if (parsed.minSize) {
-            reasonStr += ` (Detected minimum: ${formatSats(parsed.minSize)})`;
-        }
-        log(chalk.yellow(`ℹ ${reasonStr}`));
-
-        // Record results and rejections
-        for (const attempt of viableAttempts) {
-            // Is this specific node the cause of the failure?
-            const isImplicated = !parsed.pubkey || parsed.pubkey === attempt.pubkey;
-
-            results.push({
-                pubkey: attempt.pubkey,
-                success: false,
-                error: isImplicated ? parsed.details : 'Batch cancelled due to failure in other node',
-                rejectionReason: isImplicated ? parsed.reason : 'batch_failed',
-                detectedMinimum: isImplicated ? parsed.minSize : undefined,
-            });
-
-            // Only record rejection for retry logic if this specific node was named
-            if (isImplicated) {
-                addRejection(attempt.pubkey, {
+            // Match pending channels to our attempts
+            for (let i = 0; i < result.pending.length; i++) {
+                attempts[i].pendingId = result.pending[i].id;
+                attempts[i].address = result.pending[i].address;
+            }
+            // If we successfully initiated everything, we can exit the convergence loop
+            break;
+        } catch (error) {
+            const parsed = parseOpenError(error);
+            log(chalk.red(`✗ Step 2 failed: ${parsed.details}`));
+            
+            if (parsed.pubkey) {
+                log(chalk.yellow(`ℹ Node ${parsed.pubkey} rejected initiation. Marking and re-planning...`));
+                addRejection(parsed.pubkey, {
                     date: new Date(),
                     reason: parsed.reason,
                     details: parsed.details,
                     minChannelSize: parsed.minSize,
                 });
+                
+                currentPlan = createPlan({
+                    budget: currentPlan.budget,
+                    defaultSize,
+                    maxSize,
+                    openPeerPubkeys,
+                    candidates: overrideCandidates ?? loadCandidates()
+                });
+                backfilled = true;
+                continue;
+            } else {
+                // If it's a batch-wide failure without a specific pubkey (e.g. insufficient funds)
+                // we have to abort or handle specially.
+                log(chalk.red('Fatal batch error. Aborting.'));
+                throw error;
             }
         }
+    }
 
-        saveHistory(plan, results);
+    if (attempts.length === 0) {
+        log(chalk.yellow('No viable nodes left to open.'));
         return results;
     }
 
-    // Match pending channels to our attempts
-    for (let i = 0; i < pendingChannels.length; i++) {
-        viableAttempts[i].pendingId = pendingChannels[i].id;
-        viableAttempts[i].address = pendingChannels[i].address;
-    }
-
-    log(`Step 3/5: Creating funding PSBT for ${pendingChannels.length} outputs...`);
-
-    // Step 2: Create PSBT with all outputs
-    const outputs = pendingChannels.map(p => ({
-        address: p.address,
-        tokens: p.tokens,
+    // Step 3: Create PSBT with all outputs
+    log(`Step 3/5: Creating funding PSBT for ${attempts.length} outputs...`);
+    const outputs = attempts.map(a => ({
+        address: a.address!,
+        tokens: a.amount,
     }));
 
     let unsignedPsbt: string;
@@ -394,29 +371,14 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         });
         unsignedPsbt = fundResult.psbt;
     } catch (error) {
-        // Funding failed - likely insufficient funds
         const parsed = parseOpenError(error);
         log(`Failed to create PSBT: ${parsed.details}`);
-
-        // Cancel all pending channels
-        await cancelAllPending(lnd, viableAttempts, log);
-
-        for (const attempt of viableAttempts) {
-            results.push({
-                pubkey: attempt.pubkey,
-                success: false,
-                error: `Funding failed: ${parsed.details}`,
-                rejectionReason: parsed.reason,
-            });
-        }
-
-        saveHistory(plan, results);
-        return results;
+        await cancelAllPending(lnd, attempts, log);
+        throw error;
     }
 
-    // Step 3: Sign the PSBT
+    // Step 4: Sign the PSBT
     log('Step 4/5: Signing PSBT...');
-
     let signedPsbt: string;
     let transaction: string | undefined;
     try {
@@ -429,28 +391,13 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     } catch (error) {
         const parsed = parseOpenError(error);
         log(`Failed to sign PSBT: ${parsed.details}`);
-
-        await cancelAllPending(lnd, viableAttempts, log);
-
-        for (const attempt of viableAttempts) {
-            results.push({
-                pubkey: attempt.pubkey,
-                success: false,
-                error: `Signing failed: ${parsed.details}`,
-                rejectionReason: parsed.reason,
-            });
-        }
-
-        saveHistory(plan, results);
-        return results;
+        await cancelAllPending(lnd, attempts, log);
+        throw error;
     }
 
-    // Step 4: Fund pending channels with signed PSBT
+    // Step 5: Fund pending channels with signed PSBT
     log('Step 5/5: Broadcasting funding transaction...');
-
-    const pendingIds = viableAttempts
-        .filter(a => a.pendingId)
-        .map(a => a.pendingId!);
+    const pendingIds = attempts.map(a => a.pendingId!);
 
     try {
         await lnService.fundPendingChannels({
@@ -467,23 +414,18 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             });
         }
 
-
-        // All channels funded successfully
-        for (const attempt of viableAttempts) {
+        for (const attempt of attempts) {
             results.push({
                 pubkey: attempt.pubkey,
                 success: true,
                 channelId: attempt.pendingId,
             });
         }
-
-        log(`✓ Funding transaction broadcast! ${viableAttempts.length} channels opening.`);
+        log(`✓ Funding transaction broadcast! ${attempts.length} channels opening.`);
     } catch (error) {
-        // Final funding failed
         const parsed = parseOpenError(error);
         log(`Failed to broadcast funding: ${parsed.details}`);
-
-        for (const attempt of viableAttempts) {
+        for (const attempt of attempts) {
             results.push({
                 pubkey: attempt.pubkey,
                 success: false,
@@ -493,7 +435,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         }
     }
 
-    saveHistory(plan, results);
+    saveHistory(currentPlan, results);
     return results;
 }
 

@@ -536,9 +536,14 @@ program
 
                         const { executePlan, formatResults } = await import('./opener.js');
                         console.log(chalk.yellow('\nOpening channels...'));
+                        const candidates = loadCandidates();
                         const results = await executePlan(plan, {
                             feeRate,
                             onProgress: (msg: string) => console.log(msg),
+                            availableCandidates: candidates,
+                            openPeerPubkeys,
+                            defaultSize,
+                            maxSize
                         });
                         console.log(formatResults(results));
 
@@ -711,9 +716,14 @@ program
             }]);
 
             console.log(chalk.yellow('\nOpening channels...'));
+            const candidates = loadCandidates();
             const results = await executePlan(plan, {
                 feeRate,
                 onProgress: (msg: string) => console.log(msg),
+                availableCandidates: candidates,
+                openPeerPubkeys,
+                defaultSize: parseInt(options.defaultSize),
+                maxSize: parseInt(options.maxSize),
             });
             console.log(formatResults(results));
             process.exit(0);
