@@ -199,12 +199,13 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     const { lnd } = await connectLnd();
 
     const results: OpenResult[] = [];
+    const verifiedPeers = new Set<string>(); // Persist successful connections across iterations
     let currentPlan = plan;
     let attempts: ChannelOpenAttempt[] = [];
     let backfilled = false;
     let iteration = 0;
     let pendingStarted = false;
-    const MAX_ITERATIONS = 5;
+    const MAX_ITERATIONS = 10;
 
     while (iteration < MAX_ITERATIONS) {
         iteration++;
@@ -254,7 +255,13 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
         for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
             const batch = attempts.slice(i, i + BATCH_SIZE);
             const batchResults = await Promise.all(batch.map(async (attempt) => {
+                // Skip if we already verified this peer in this session
+                if (verifiedPeers.has(attempt.pubkey)) {
+                    return { attempt, success: true };
+                }
+
                 if (connectedSet.has(attempt.pubkey)) {
+                    verifiedPeers.add(attempt.pubkey);
                     return { attempt, success: true };
                 }
 
@@ -273,6 +280,7 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                     try {
                         await connectPeer(attempt.pubkey, address, 15000);
                         log(`  ✓ ${attempt.alias}: Connected`);
+                        verifiedPeers.add(attempt.pubkey);
                         return { attempt, success: true };
                     } catch (err) {
                         const parsed = parseOpenError(err);
