@@ -244,10 +244,15 @@ async function listCandidates(options: { eligible?: boolean; all?: boolean; byDi
         const openPeerPubkeys = new Set<string>();
         try {
             await connectLnd();
-            const channels = await import('./lnd.js').then(m => m.getChannels());
+            const { getChannels, getPendingChannels } = await import('./lnd.js');
+            const [channels, pending] = await Promise.all([
+                getChannels(),
+                getPendingChannels()
+            ]);
             channels.forEach(c => openPeerPubkeys.add(c.partner_public_key));
+            pending.forEach(c => openPeerPubkeys.add(c.partner_public_key));
         } catch (e) {
-            console.error(chalk.yellow('  Warning: Could not fetch open channels from LND. Results might include existing partners.'));
+            console.error(chalk.yellow('  Warning: Could not fetch existing channels from LND. Results might include existing partners.'));
         }
 
         // Filter
@@ -468,8 +473,15 @@ program
             const balance = await getChainBalance();
             const available = balance.confirmed;
 
-            const channels = await import('./lnd.js').then(m => m.getChannels());
-            openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
+            const { getChannels, getPendingChannels } = await import('./lnd.js');
+            const [channels, pending] = await Promise.all([
+                getChannels(),
+                getPendingChannels()
+            ]);
+            openPeerPubkeys = new Set([
+                ...channels.map(c => c.partner_public_key),
+                ...pending.map(c => c.partner_public_key)
+            ]);
 
             if (options.budget) {
                 budget = parseInt(options.budget);
@@ -692,13 +704,18 @@ program
             process.exit(1);
         }
 
-        let openPeerPubkeys: Set<string> | undefined;
+        const openPeerPubkeys = new Set<string>();
         try {
-            const { getChannels } = await import('./lnd.js');
-            const channels = await getChannels();
-            openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
-        } catch (e) {}
-
+            const { getChannels, getPendingChannels } = await import('./lnd.js');
+            const [channels, pending] = await Promise.all([
+                getChannels(),
+                getPendingChannels()
+            ]);
+            channels.forEach(c => openPeerPubkeys.add(c.partner_public_key));
+            pending.forEach(c => openPeerPubkeys.add(c.partner_public_key));
+        } catch (e) {
+            // Silently ignore, just planner might show duplicates
+        }
         const plan = createPlan({
             budget: parseInt(options.budget),
             defaultSize: parseInt(options.defaultSize),

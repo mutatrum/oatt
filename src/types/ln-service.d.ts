@@ -218,4 +218,23 @@ declare module 'ln-service' {
         psbt: string;
         transaction: string;
     }>;
+
+    export function getPendingChannels(args: {
+        lnd: unknown;
+    }): Promise<{
+        pending_channels: {
+            id: string;
+            is_active: boolean;
+            is_closing: boolean;
+            is_opening: boolean;
+            local_balance: number;
+            partner_public_key: string;
+            received: number;
+            remote_balance: number;
+            sent: number;
+            transaction_fee: number;
+            transaction_id: string;
+            transaction_vout: number;
+        }[];
+    }>;
 }

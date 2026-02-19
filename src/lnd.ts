@@ -12,6 +12,7 @@ type Channel = Awaited<ReturnType<typeof lnService.getChannels>>['channels'][0];
 type ClosedChannel = Awaited<ReturnType<typeof lnService.getClosedChannels>>['channels'][0];
 type Forward = Awaited<ReturnType<typeof lnService.getForwards>>['forwards'][0];
 type NetworkGraph = Awaited<ReturnType<typeof lnService.getNetworkGraph>>;
+type PendingChannel = Awaited<ReturnType<typeof lnService.getPendingChannels>>['pending_channels'][0];
 
 // LND connection singleton
 let authenticatedLnd: lnService.AuthenticatedLnd | null = null;
@@ -86,6 +87,13 @@ export async function getChannels(): Promise<Channel[]> {
     const { lnd } = await connectLnd();
     const result = await lnService.getChannels({ lnd });
     return result.channels;
+}
+
+// Get pending channels
+export async function getPendingChannels(): Promise<PendingChannel[]> {
+    const { lnd } = await connectLnd();
+    const result = await lnService.getPendingChannels({ lnd });
+    return result.pending_channels;
 }
 
 // Get closed channels
