@@ -95,15 +95,29 @@ export async function getClosedChannels(): Promise<ClosedChannel[]> {
     return result.channels;
 }
 
-// Get forwarding history
+// Get forwarding history (paginates automatically through all pages)
 export async function getForwardingHistory(after?: Date, before?: Date): Promise<Forward[]> {
     const { lnd } = await connectLnd();
-    const result = await lnService.getForwards({
-        lnd,
-        after: after?.toISOString(),
-        before: before?.toISOString(),
-    });
-    return result.forwards;
+    // ln-service requires 'before' whenever 'after' is provided
+    const effectiveBefore = after ? (before ?? new Date()) : before;
+
+    const allForwards: Forward[] = [];
+    let token: string | undefined = undefined;
+    const limit = 100;
+
+    do {
+        const result = await lnService.getForwards({
+            lnd,
+            after: after?.toISOString(),
+            before: effectiveBefore?.toISOString(),
+            limit,
+            token,
+        });
+        allForwards.push(...result.forwards);
+        token = result.next;
+    } while (token !== undefined);
+
+    return allForwards;
 }
 
 // Get network graph

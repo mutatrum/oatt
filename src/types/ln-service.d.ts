@@ -61,6 +61,8 @@ declare module 'ln-service' {
         lnd: unknown;
         after?: string;
         before?: string;
+        limit?: number;
+        token?: string;
     }): Promise<{
         forwards: {
             created_at: string;
@@ -69,6 +71,7 @@ declare module 'ln-service' {
             outgoing_channel: string;
             tokens: number;
         }[];
+        next?: string;
     }>;
 
     export function getNetworkGraph(args: { lnd: unknown }): Promise<{
