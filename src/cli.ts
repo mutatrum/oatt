@@ -100,7 +100,10 @@ program
     .option('-e, --eligible', 'Show only eligible candidates (no blocking rejections)')
     .option('-d, --by-distance', 'Sort by graph distance')
     .option('-a, --all', 'Show all details including rejections')
-    .action((options) => {
+    .action(async (options) => {
+        const { isEligible } = await import('./planner.js');
+        const { getChannels } = await import('./lnd.js');
+
         const candidates = loadCandidates();
 
         if (candidates.length === 0) {
@@ -108,28 +111,20 @@ program
             return;
         }
 
+        let openPeerPubkeys: Set<string> | undefined;
+        try {
+            await connectLnd();
+            const channels = await getChannels();
+            openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
+        } catch (e) {
+            console.warn(chalk.yellow('Warning: Could not fetch open channels from LND. List may include existing partners.'));
+        }
+
         let filtered = candidates;
 
         // Filter eligible only
         if (options.eligible) {
-            filtered = candidates.filter(c => {
-                if (c.rejections.length === 0) return true;
-
-                // Check if all rejections are retryable
-                return c.rejections.every(r => {
-                    const config = REJECTION_CONFIG[r.reason];
-                    if (!config.retryable) return false;
-
-                    // Check cooldown
-                    if (config.cooldownDays !== undefined) {
-                        const cooldownMs = config.cooldownDays * 24 * 60 * 60 * 1000;
-                        const age = Date.now() - new Date(r.date).getTime();
-                        return age >= cooldownMs;
-                    }
-
-                    return true;
-                });
-            });
+            filtered = candidates.filter(c => isEligible(c, openPeerPubkeys));
         }
 
         // Sort
@@ -349,11 +344,15 @@ program
         const { getChainBalance, connectLnd } = await import('./lnd.js');
 
         let budget: number;
+        let openPeerPubkeys: Set<string> | undefined;
         
         try {
             await connectLnd();
             const balance = await getChainBalance();
             const available = balance.confirmed;
+
+            const channels = await import('./lnd.js').then(m => m.getChannels());
+            openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
             
             if (options.budget) {
                 budget = parseInt(options.budget);
@@ -373,7 +372,7 @@ program
             if (options.budget) {
                 budget = parseInt(options.budget);
             } else {
-                console.error(chalk.red('Error fetching chain balance:'), error);
+                console.error(chalk.red('Error fetching chain balance or channels:'), error);
                 console.log(chalk.yellow('\nTip: You can specify a budget explicitly with --budget <sats>'));
                 process.exit(1);
             }
@@ -382,7 +381,7 @@ program
         const defaultSize = parseInt(options.defaultSize);
         const maxSize = parseInt(options.maxSize);
 
-        let plan = createPlan({ budget, defaultSize, maxSize });
+        let plan = createPlan({ budget, defaultSize, maxSize, openPeerPubkeys });
 
         // Log adjustments
         plan.channels.forEach(ch => {
@@ -426,9 +425,17 @@ program
                         default: false,
                     }]);
                     if (confirm) {
+                        const { feeRate } = await inquirer.default.prompt([{
+                            type: 'number',
+                            name: 'feeRate',
+                            message: 'Enter fee rate (sats/vB):',
+                            default: 2,
+                        }]);
+
                         const { executePlan, formatResults } = await import('./opener.js');
                         console.log(chalk.yellow('\nOpening channels...'));
                         const results = await executePlan(plan, {
+                            feeRate,
                             onProgress: (msg: string) => console.log(msg),
                         });
                         console.log(formatResults(results));
@@ -442,7 +449,7 @@ program
                                 default: true,
                             }]);
                             if (retry) {
-                                plan = createPlan({ budget, defaultSize, maxSize });
+                                plan = createPlan({ budget, defaultSize, maxSize, openPeerPubkeys });
                                 console.log(formatPlan(plan));
                                 continue;
                             }
@@ -517,7 +524,7 @@ program
                     break;
                 }
                 case 'refresh': {
-                    plan = createPlan({ budget, defaultSize, maxSize });
+                    plan = createPlan({ budget, defaultSize, maxSize, openPeerPubkeys });
                     console.log(formatPlan(plan));
                     break;
                 }
@@ -527,10 +534,11 @@ program
                     break;
                 }
                 case 'quit':
-                    done = true;
+                    process.exit(0);
                     break;
             }
         }
+        process.exit(0);
     });
 
 // ============ open ============
@@ -543,8 +551,9 @@ program
     .option('-s, --default-size <sats>', 'Default channel size', '1000000')
     .option('-m, --max-size <sats>', 'Maximum channel size', '10000000')
     .action(async (options) => {
-        const { createPlan, formatPlan } = await import('./planner.js');
+        const { createPlan, formatPlan, formatSats } = await import('./planner.js');
         const { executePlan, formatResults, generateBosCommand } = await import('./opener.js');
+        const inquirer = await import('inquirer');
 
         // Create plan from budget
         if (!options.budget) {
@@ -553,10 +562,18 @@ program
             process.exit(1);
         }
 
+        let openPeerPubkeys: Set<string> | undefined;
+        try {
+            const { getChannels } = await import('./lnd.js');
+            const channels = await getChannels();
+            openPeerPubkeys = new Set(channels.map(c => c.partner_public_key));
+        } catch (e) {}
+
         const plan = createPlan({
             budget: parseInt(options.budget),
             defaultSize: parseInt(options.defaultSize),
             maxSize: parseInt(options.maxSize),
+            openPeerPubkeys,
         });
 
         console.log(chalk.bold('\nBatch Channel Open Plan'));
@@ -572,11 +589,10 @@ program
             console.log('Equivalent bos command:');
             console.log(chalk.gray(generateBosCommand(plan)));
             console.log('');
-            return;
+            process.exit(0);
         }
 
         // Confirm before executing
-        const inquirer = await import('inquirer');
         const { confirm } = await inquirer.default.prompt([{
             type: 'confirm',
             name: 'confirm',
@@ -584,16 +600,24 @@ program
             default: false,
         }]);
 
-        if (!confirm) {
-            console.log(chalk.yellow('Cancelled.'));
-            return;
-        }
+        if (confirm) {
+            const { feeRate } = await inquirer.default.prompt([{
+                type: 'number',
+                name: 'feeRate',
+                message: 'Enter fee rate (sats/vB):',
+                default: 2,
+            }]);
 
-        console.log(chalk.yellow('\nOpening channels...'));
-        const results = await executePlan(plan, {
-            onProgress: (msg: string) => console.log(msg),
-        });
-        console.log(formatResults(results));
+            console.log(chalk.yellow('\nOpening channels...'));
+            const results = await executePlan(plan, {
+                feeRate,
+                onProgress: (msg: string) => console.log(msg),
+            });
+            console.log(formatResults(results));
+            process.exit(0);
+        } else {
+            process.exit(0);
+        }
     });
 
 program.parse();

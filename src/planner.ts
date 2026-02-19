@@ -14,12 +14,18 @@ export interface PlanOptions {
     defaultSize: number;
     maxSize: number;
     candidates?: ChannelCandidate[];  // Optional override, otherwise load from storage
+    openPeerPubkeys?: Set<string>;
 }
 
 /**
  * Check if a candidate is eligible for channel opens
  */
-export function isEligible(candidate: ChannelCandidate): boolean {
+export function isEligible(candidate: ChannelCandidate, openPeerPubkeys?: Set<string>): boolean {
+    // If we already have a channel with this peer, they are not eligible
+    if (openPeerPubkeys?.has(candidate.pubkey)) {
+        return false;
+    }
+
     // No rejections = eligible
     if (candidate.rejections.length === 0) {
         return true;
@@ -64,7 +70,7 @@ export function createPlan(options: PlanOptions): OpenPlan {
     let candidates = options.candidates ?? loadCandidates();
 
     // Filter to eligible candidates only
-    candidates = candidates.filter(isEligible);
+    candidates = candidates.filter(c => isEligible(c, options.openPeerPubkeys));
 
     // Filter out candidates with minimum > maxSize
     candidates = candidates.filter(c => getEffectiveMinimum(c, defaultSize) <= maxSize);

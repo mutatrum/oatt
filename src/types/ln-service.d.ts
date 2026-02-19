@@ -152,6 +152,7 @@ declare module 'ln-service' {
         psbt: string;
     }): Promise<{
         psbt: string;
+        transaction?: string;
     }>;
 
     export function fundPendingChannels(args: {
@@ -200,5 +201,18 @@ declare module 'ln-service' {
     }): Promise<{
         is_active: boolean;
         is_ready: boolean;
+    }>;
+
+    export function broadcastChainTransaction(args: {
+        lnd: unknown;
+        transaction: string;
+    }): Promise<{ id: string }>;
+
+    export function finalizePsbt(args: {
+        lnd: unknown;
+        psbt: string;
+    }): Promise<{
+        psbt: string;
+        transaction: string;
     }>;
 }

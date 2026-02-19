@@ -412,12 +412,14 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
     log('Step 4/5: Signing PSBT...');
 
     let signedPsbt: string;
+    let transaction: string | undefined;
     try {
         const signResult = await lnService.signPsbt({
             lnd,
             psbt: unsignedPsbt,
         });
         signedPsbt = signResult.psbt;
+        transaction = signResult.transaction;
     } catch (error) {
         const parsed = parseOpenError(error);
         log(`Failed to sign PSBT: ${parsed.details}`);
@@ -450,6 +452,15 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             channels: pendingIds,
             funding: signedPsbt,
         });
+
+        if (transaction) {
+            log('Actually broadcasting funding transaction...');
+            await lnService.broadcastChainTransaction({
+                lnd,
+                transaction,
+            });
+        }
+
 
         // All channels funded successfully
         for (const attempt of viableAttempts) {
