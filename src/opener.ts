@@ -248,11 +248,12 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                 return { attempt, success: false, reason, errorMsg };
             }
 
-            // Try all addresses for this peer
-            log(`  • ${attempt.alias}: Connecting to ${info.addresses.length} addresses...`);
+            // Try all addresses for this peer (deduplicated)
+            const uniqueAddresses = Array.from(new Set(info.addresses));
+            log(`  • ${attempt.alias}: Connecting to ${uniqueAddresses.length} addresses...`);
             let lastError = 'Failed to connect';
-            for (let j = 0; j < info.addresses.length; j++) {
-                const address = info.addresses[j];
+            for (let j = 0; j < uniqueAddresses.length; j++) {
+                const address = uniqueAddresses[j];
                 try {
                     // Use a 15 second timeout for each attempt
                     await connectPeer(attempt.pubkey, address, 15000);
