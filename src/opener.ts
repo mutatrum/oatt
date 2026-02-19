@@ -307,13 +307,22 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
 
         if (dropoutCount > 0) {
             log(chalk.blue(`ℹ ${dropoutCount} nodes failed connection. Re-planning to backfill budget...`));
-            currentPlan = createPlan({
+            const nextPlan = createPlan({
                 budget: currentPlan.budget,
                 defaultSize,
                 maxSize,
                 openPeerPubkeys,
                 candidates: loadCandidates() // Always load from disk to pick up recent rejections
             });
+
+            // Log new additions
+            const currentPubkeys = new Set(currentPlan.channels.map(c => c.pubkey));
+            const added = nextPlan.channels.filter(c => !currentPubkeys.has(c.pubkey));
+            if (added.length > 0) {
+                log(chalk.green(`  + Backfilling with: ${added.map(c => c.alias).join(', ')}`));
+            }
+
+            currentPlan = nextPlan;
             backfilled = true;
             continue; // Re-attempt connection phase with new plan
         }
@@ -345,7 +354,10 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
             log(chalk.red(`✗ Step 2 failed: ${parsed.details}`));
             
             if (parsed.pubkey) {
-                log(chalk.yellow(`ℹ Node ${parsed.pubkey} rejected initiation. Marking and re-planning...`));
+                const rejectingNode = attempts.find(a => a.pubkey === parsed.pubkey);
+                const alias = rejectingNode?.alias ?? parsed.pubkey.slice(0, 10);
+                
+                log(chalk.yellow(`ℹ Node ${alias} rejected initiation.`));
                 addRejection(parsed.pubkey, {
                     date: new Date(),
                     reason: parsed.reason,
@@ -353,13 +365,36 @@ export async function executePlan(plan: OpenPlan, options: OpenOptions = {}): Pr
                     minChannelSize: parsed.minSize,
                 });
                 
-                currentPlan = createPlan({
+                const nextPlan = createPlan({
                     budget: currentPlan.budget,
                     defaultSize,
                     maxSize,
                     openPeerPubkeys,
                     candidates: loadCandidates()
                 });
+
+                // Inform about the specific change
+                if (parsed.minSize && parsed.minSize > maxSize) {
+                    log(chalk.yellow(`  → Node ${alias} requires ${formatSats(parsed.minSize)} which exceeds maxSize. Dropping.`));
+                } else if (parsed.minSize) {
+                    const nextAttempt = nextPlan.channels.find(c => c.pubkey === parsed.pubkey);
+                    if (nextAttempt) {
+                        log(chalk.blue(`  → Node ${alias} requires ${formatSats(parsed.minSize)}. Bumping and re-planning batch...`));
+                    } else {
+                        log(chalk.yellow(`  → Node ${alias} bumped to ${formatSats(parsed.minSize)} but budget is full. Dropping.`));
+                    }
+                } else {
+                    log(chalk.blue(`  → Re-planning batch to replace ${alias}...`));
+                }
+
+                // Log new additions
+                const currentPubkeys = new Set(currentPlan.channels.map(c => c.pubkey));
+                const added = nextPlan.channels.filter(c => !currentPubkeys.has(c.pubkey));
+                if (added.length > 0) {
+                    log(chalk.green(`  + Backfilling with: ${added.map(c => c.alias).join(', ')}`));
+                }
+
+                currentPlan = nextPlan;
                 backfilled = true;
                 continue;
             } else {
